@@ -1,0 +1,10 @@
+Demo: meccanismo tramite segreto, condiviso all'indietro nell'insieme di nodi
+
+nodo genera ash e off chain lo comunico alla lista di nodi
+simulare il pagamento (o farlo sulla testnet): garanzia di prendere soldi solo con correttezza del segreto (ash corretto), implementando anche il time ash lock, illustrandone il funzionamento
+
+casi particolari: un nodo ritarda, un nodo non paga, recipient dà un ash sbagliato, timeout lungo, timeout breve
+
+implementarlo tramite script sulla rete blockchain: complicato
+idea: implementazione tale da permettere il porting sulla chain
+concentrarsi sulla prova di correttezza
