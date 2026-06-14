@@ -2,3 +2,4 @@
 	[ ] ogni volta che si aggiorna il canale i due attori si devono scambiare un segreto sulla transazione precedente
 	[ ] entro quanto puoi riscattare i tuoi soldi se provano a validare una transazione vecchia? => TIME LOCK
 	[ ] come entra in gioco l'hash time lock?
+	[ ] implementare grafo su lightning network
