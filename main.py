@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 
@@ -12,12 +12,25 @@ class MultiSigAddress:
 
 
 @dataclass
+class CommitmentTransaction:
+    transaction_id: int
+    channel_id: int
+    funding_address: str
+    balances: dict[str, int]
+    signatures: tuple[str, ...]
+
+
+@dataclass
 class Channel:
     channel_id: int
     funding_address: str
     participants: tuple[str, ...]
     capacity: int
     balances: dict[str, int]
+    commitment_transactions: dict[int, CommitmentTransaction] = field(
+        default_factory=dict
+    )
+    next_transaction_id: int = 0
     is_open: bool = True
 
 
@@ -94,7 +107,9 @@ class BlockChain:
         self.next_channel_id += 1
         return channel
 
-    def pay_in_channel(self, channel_id: int, sender: str, recipient: str, amount: int):
+    def pay_in_channel(
+        self, channel_id: int, sender: str, recipient: str, amount: int
+    ) -> CommitmentTransaction:
         channel = self.get_open_channel(channel_id)
 
         if sender not in channel.balances or recipient not in channel.balances:
@@ -106,20 +121,40 @@ class BlockChain:
 
         channel.balances[sender] -= amount
         channel.balances[recipient] += amount
+        return self.create_commitment_transaction(channel)
 
-    def close_channel(self, channel_id: int, signatures: list[str]) -> dict[str, int]:
+    def create_commitment_transaction(self, channel: Channel) -> CommitmentTransaction:
+        transaction = CommitmentTransaction(
+            transaction_id=channel.next_transaction_id,
+            channel_id=channel.channel_id,
+            funding_address=channel.funding_address,
+            balances=dict(channel.balances),
+            signatures=channel.participants,
+        )
+        channel.commitment_transactions[transaction.transaction_id] = transaction
+        channel.next_transaction_id += 1
+        return transaction
+
+    def close_channel(
+        self, channel_id: int, transaction_id: int, signatures: list[str]
+    ) -> dict[str, int]:
         channel = self.get_open_channel(channel_id)
         funding_wallet = self.get_address(channel.funding_address)
+        transaction = self.get_commitment_transaction(channel, transaction_id)
 
         if not self.has_enough_valid_signatures(funding_wallet, signatures):
             raise ValueError("servono entrambe le firme per chiudere il canale")
+        if not self.has_enough_valid_signatures(
+            funding_wallet, list(transaction.signatures)
+        ):
+            raise ValueError("la commitment transaction non e' firmata correttamente")
 
-        if sum(channel.balances.values()) != channel.capacity:
+        if sum(transaction.balances.values()) != channel.capacity:
             raise ValueError("stato del canale incoerente")
 
         funding_wallet.balance = 0
         channel.is_open = False
-        return dict(channel.balances)
+        return dict(transaction.balances)
 
     def derive_address(self, public_keys: tuple[str, ...], threshold: int) -> str:
         payload = json.dumps(
@@ -148,6 +183,13 @@ class BlockChain:
             raise ValueError("canale gia' chiuso")
         return channel
 
+    def get_commitment_transaction(
+        self, channel: Channel, transaction_id: int
+    ) -> CommitmentTransaction:
+        if transaction_id not in channel.commitment_transactions:
+            raise ValueError("commitment transaction sconosciuta")
+        return channel.commitment_transactions[transaction_id]
+
     def __str__(self):
         return str(self.addresses)
 
@@ -158,10 +200,18 @@ def main():
     channel = bc.open_lightning_channel({"alice": 10, "bob": 5})
     print(channel)
 
-    bc.pay_in_channel(channel.channel_id, "alice", "bob", 3)
-    print(channel)
+    tx0 = bc.pay_in_channel(channel.channel_id, "alice", "bob", 2)
+    tx1 = bc.pay_in_channel(channel.channel_id, "bob", "alice", 1)
+    tx2 = bc.pay_in_channel(channel.channel_id, "alice", "bob", 4)
 
-    final_balances = bc.close_channel(channel.channel_id, ["alice", "bob"])
+    print(f"current balances: {channel.balances}")
+    print(f"tx{tx0.transaction_id} unlocks: {tx0.balances}")
+    print(f"tx{tx1.transaction_id} unlocks: {tx1.balances}")
+    print(f"tx{tx2.transaction_id} unlocks: {tx2.balances}")
+
+    final_balances = bc.close_channel(
+        channel.channel_id, tx2.transaction_id, ["alice", "bob"]
+    )
     print(final_balances)
 
 
