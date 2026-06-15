@@ -14,7 +14,7 @@ def main():
     channel = ln.open_channel({alice.public_key: 10, bob.public_key: 5})
     print(channel)
 
-    tx0 = ln.create_commitment(
+    tx0 = ln.create_transaction(
         channel.channel_id,
         {
             alice.public_key: 10,
@@ -24,7 +24,7 @@ def main():
     tx0.add_signature(alice.public_key, alice.sign(tx0.payload()))
     tx0.add_signature(bob.public_key, bob.sign(tx0.payload()))
 
-    tx1 = ln.create_commitment(
+    tx1 = ln.create_transaction(
         channel.channel_id,
         {
             alice.public_key: 8,
@@ -34,7 +34,7 @@ def main():
     tx1.add_signature(alice.public_key, alice.sign(tx1.payload()))
     tx1.add_signature(bob.public_key, bob.sign(tx1.payload()))
 
-    tx2 = ln.create_commitment(
+    tx2 = ln.create_transaction(
         channel.channel_id,
         {
             alice.public_key: 9,

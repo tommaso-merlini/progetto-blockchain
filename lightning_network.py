@@ -76,7 +76,7 @@ class LightningNetwork:
         self.next_channel_id += 1
         return channel
 
-    def create_commitment(
+    def create_transaction(
         self,
         channel_id: ChannelId,
         balances: Balances,
