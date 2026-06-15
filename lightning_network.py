@@ -5,7 +5,6 @@ from domain_types import (
     Address,
     Balances,
     ChannelId,
-    Contributions,
     Money,
     PublicKey,
     Signature,
@@ -54,23 +53,20 @@ class LightningNetwork:
         self.channels: dict[ChannelId, Channel] = {}
         self.next_channel_id: ChannelId = 0
 
-    # crea un MultiSigAddress nella BC ed inizializza il channel bidirezionale nella LN
-    def open_channel(self, contributions: Contributions) -> Channel:
-        if len(contributions) != 2:
-            raise ValueError("un canale Lightning base ha esattamente due partecipanti")
-        if any(amount <= 0 for amount in contributions.values()):
-            raise ValueError("ogni contributo deve essere positivo")
+    # inizializza il channel bidirezionale nella LN usando un MultiSigAddress esistente
+    def open_channel(self, funding_address: Address) -> Channel:
+        funding_wallet = self.blockchain.get_address(funding_address)
 
-        participants = tuple(sorted(contributions))
-        capacity = sum(contributions.values())
-        funding_wallet = self.blockchain.create_multi_sig_address(list(participants), 2)
-        self.blockchain.deposit(funding_wallet.address, capacity)
+        if len(funding_wallet.initial_balances) != 2:
+            raise ValueError("un canale Lightning base ha esattamente due partecipanti")
+        if funding_wallet.threshold != 2:
+            raise ValueError("un canale Lightning base usa un multisig 2-of-2")
 
         channel = Channel(
             channel_id=self.next_channel_id,
-            funding_address=funding_wallet.address,
-            participants=participants,
-            capacity=capacity,
+            funding_address=funding_address,
+            participants=funding_wallet.public_keys,
+            capacity=sum(funding_wallet.initial_balances.values()),
         )
         self.channels[channel.channel_id] = channel
         self.next_channel_id += 1
@@ -92,6 +88,13 @@ class LightningNetwork:
         )
         channel.commitments.append(transaction)
         return transaction
+
+    def create_commitment(
+        self,
+        channel_id: ChannelId,
+        balances: Balances,
+    ) -> CommitmentTransaction:
+        return self.create_transaction(channel_id, balances)
 
     def close_channel(
         self,

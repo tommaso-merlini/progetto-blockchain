@@ -11,7 +11,12 @@ def main():
     alice = ac.create_actor("alice", "Alice")
     bob = ac.create_actor("bob", "Bob")
 
-    channel = ln.open_channel({alice.public_key: 10, bob.public_key: 5})
+    funding_wallet = bc.create_multi_sig_address(
+        {alice.public_key: 10, bob.public_key: 5},
+        2,
+    )
+
+    channel = ln.open_channel(funding_wallet.address)
     print(channel)
 
     tx0 = ln.create_transaction(
@@ -44,16 +49,12 @@ def main():
     tx2.add_signature(alice.public_key, alice.sign(tx2.payload()))
     tx2.add_signature(bob.public_key, bob.sign(tx2.payload()))
 
-    print(f"tx{tx0.transaction_id} unlocks: {tx0.balances}")
-    print(f"tx{tx1.transaction_id} unlocks: {tx1.balances}")
-    print(f"tx{tx2.transaction_id} unlocks: {tx2.balances}")
-
     # TODO: invalidare le transazioni passate
     final_balances = ln.close_channel(
         channel.channel_id,
         tx2.transaction_id,
     )
-    print(final_balances)
+    print(f"final balances: {final_balances}")
 
 
 if __name__ == "__main__":

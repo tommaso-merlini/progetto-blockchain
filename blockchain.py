@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from collections.abc import Iterable
 import hashlib
 import json
 
@@ -14,7 +13,8 @@ class MultiSigAddress:
     address: Address
     public_keys: tuple[PublicKey, ...]
     threshold: Threshold
-    balance: Money = 0
+    initial_balances: Balances
+    balance: Money
 
 
 class BlockChain:
@@ -22,19 +22,27 @@ class BlockChain:
         self.addresses: dict[Address, MultiSigAddress] = {}
 
     def create_multi_sig_address(
-        self, public_keys: Iterable[PublicKey], threshold: Threshold
+        self, initial_balances: Balances, threshold: Threshold
     ) -> MultiSigAddress:
-        unique_public_keys = tuple(sorted(set(public_keys)))
+        if any(amount <= 0 for amount in initial_balances.values()):
+            raise ValueError("ogni balance iniziale deve essere positivo")
 
-        if not unique_public_keys:
+        public_keys = tuple(sorted(initial_balances))
+        if not public_keys:
             raise ValueError("servono almeno una public key")
         if threshold < 1:
             raise ValueError("la threshold deve essere almeno 1")
-        if threshold > len(unique_public_keys):
+        if threshold > len(public_keys):
             raise ValueError("la threshold non puo' superare il numero di public key")
 
-        address = self.derive_address(unique_public_keys, threshold)
-        multi_sig_address = MultiSigAddress(address, unique_public_keys, threshold)
+        address = self.derive_address(public_keys, threshold)
+        multi_sig_address = MultiSigAddress(
+            address,
+            public_keys,
+            threshold,
+            dict(initial_balances),
+            sum(initial_balances.values()),
+        )
         self.addresses[address] = multi_sig_address
         return multi_sig_address
 
@@ -59,13 +67,10 @@ class BlockChain:
         multi_sig_address = self.get_address(from_address)
         if amount > multi_sig_address.balance:
             raise ValueError("saldo insufficiente")
-        if not self.has_enough_valid_signatures(
-            multi_sig_address, payload, signatures
-        ):
+        if not self.has_enough_valid_signatures(multi_sig_address, payload, signatures):
             raise ValueError("firme valide insufficienti")
 
         multi_sig_address.balance -= amount
-        print(f"sent {amount} from {from_address} to {to_address}")
 
     @staticmethod
     def multisig_spend_payload(
@@ -95,13 +100,10 @@ class BlockChain:
         payload = self.multisig_spend_payload(from_address, outputs, metadata)
         if amount != multi_sig_address.balance:
             raise ValueError("gli output devono spendere l'intero multisig")
-        if not self.has_enough_valid_signatures(
-            multi_sig_address, payload, signatures
-        ):
+        if not self.has_enough_valid_signatures(multi_sig_address, payload, signatures):
             raise ValueError("firme valide insufficienti")
 
         multi_sig_address.balance = 0
-        print(f"sent {dict(outputs)} from {from_address}")
 
     def derive_address(
         self, public_keys: tuple[PublicKey, ...], threshold: Threshold
@@ -135,9 +137,11 @@ class BlockChain:
         self, public_key: PublicKey, payload: bytes, signature: Signature
     ) -> bool:
         try:
-            verifying_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key))
+            verifying_key = Ed25519PublicKey.from_public_bytes(
+                bytes.fromhex(public_key)
+            )
             verifying_key.verify(bytes.fromhex(signature), payload)
-        except (ValueError, InvalidSignature):
+        except ValueError, InvalidSignature:
             return False
         return True
 

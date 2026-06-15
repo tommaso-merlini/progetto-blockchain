@@ -14,9 +14,10 @@ class LightningSignatureTests(unittest.TestCase):
         self.actors = Actors()
         self.alice = self.actors.create_actor("alice", "Alice")
         self.bob = self.actors.create_actor("bob", "Bob")
-        self.channel = self.lightning_network.open_channel(
-            {self.alice.public_key: 10, self.bob.public_key: 5}
+        self.funding_wallet = self.blockchain.create_multi_sig_address(
+            {self.alice.public_key: 10, self.bob.public_key: 5}, 2
         )
+        self.channel = self.lightning_network.open_channel(self.funding_wallet.address)
 
     def create_commitment(self):
         return self.lightning_network.create_commitment(
@@ -92,6 +93,22 @@ class LightningSignatureTests(unittest.TestCase):
 
     def test_open_channel_does_not_create_initial_commitment(self):
         self.assertEqual(len(self.channel.commitments), 0)
+
+    def test_open_channel_uses_funding_wallet_initial_balances(self):
+        self.assertEqual(
+            self.channel.participants,
+            tuple(sorted([self.alice.public_key, self.bob.public_key])),
+        )
+        self.assertEqual(self.channel.capacity, 15)
+        self.assertEqual(self.funding_wallet.balance, 15)
+
+    def test_open_channel_requires_two_of_two_funding_wallet(self):
+        funding_wallet = self.blockchain.create_multi_sig_address(
+            {self.alice.public_key: 10, self.bob.public_key: 5}, 1
+        )
+
+        with self.assertRaisesRegex(ValueError, "2-of-2"):
+            self.lightning_network.open_channel(funding_wallet.address)
 
     def test_create_commitment_can_create_initial_commitment(self):
         initial_commitment = self.lightning_network.create_commitment(

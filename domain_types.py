@@ -10,4 +10,3 @@ type Threshold = int
 type TransactionId = int
 
 type Balances = dict[PublicKey, Money]
-type Contributions = dict[PublicKey, Money]
