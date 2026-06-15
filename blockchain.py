@@ -1,22 +1,25 @@
 from dataclasses import dataclass
+from collections.abc import Iterable
 import hashlib
 import json
+
+from domain_types import Address, Money, PublicKey, Signature, Threshold
 
 
 @dataclass
 class MultiSigAddress:
-    address: str
-    public_keys: tuple[str, ...]
-    threshold: int
-    balance: int = 0
+    address: Address
+    public_keys: tuple[PublicKey, ...]
+    threshold: Threshold
+    balance: Money = 0
 
 
 class BlockChain:
     def __init__(self):
-        self.addresses: dict[str, MultiSigAddress] = {}
+        self.addresses: dict[Address, MultiSigAddress] = {}
 
     def create_multi_sig_address(
-        self, public_keys: list[str], threshold: int
+        self, public_keys: Iterable[PublicKey], threshold: Threshold
     ) -> MultiSigAddress:
         unique_public_keys = tuple(sorted(set(public_keys)))
 
@@ -32,7 +35,7 @@ class BlockChain:
         self.addresses[address] = multi_sig_address
         return multi_sig_address
 
-    def deposit(self, address: str, amount: int):
+    def deposit(self, address: Address, amount: Money):
         if amount <= 0:
             raise ValueError("l'importo deve essere positivo")
 
@@ -41,10 +44,10 @@ class BlockChain:
 
     def spend(
         self,
-        from_address: str,
-        to_address: str,
-        amount: int,
-        signatures: list[str],
+        from_address: Address,
+        to_address: Address,
+        amount: Money,
+        signatures: Iterable[Signature],
     ):
         if amount <= 0:
             raise ValueError("l'importo deve essere positivo")
@@ -58,20 +61,22 @@ class BlockChain:
         multi_sig_address.balance -= amount
         print(f"sent {amount} from {from_address} to {to_address}")
 
-    def derive_address(self, public_keys: tuple[str, ...], threshold: int) -> str:
+    def derive_address(
+        self, public_keys: tuple[PublicKey, ...], threshold: Threshold
+    ) -> Address:
         payload = json.dumps(
             {"public_keys": public_keys, "threshold": threshold},
             sort_keys=True,
         )
         return hashlib.sha256(payload.encode()).hexdigest()[:40]
 
-    def get_address(self, address: str) -> MultiSigAddress:
+    def get_address(self, address: Address) -> MultiSigAddress:
         if address not in self.addresses:
             raise ValueError("address sconosciuto")
         return self.addresses[address]
 
     def has_enough_valid_signatures(
-        self, multi_sig_address: MultiSigAddress, signatures: list[str]
+        self, multi_sig_address: MultiSigAddress, signatures: Iterable[Signature]
     ) -> bool:
         valid_signers = set(signatures).intersection(multi_sig_address.public_keys)
         return len(valid_signers) >= multi_sig_address.threshold

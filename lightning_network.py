@@ -1,38 +1,48 @@
 from dataclasses import dataclass, field
 
 from blockchain import BlockChain
+from domain_types import (
+    Address,
+    Balances,
+    ChannelId,
+    Contributions,
+    Money,
+    PublicKey,
+    Signature,
+    TransactionId,
+)
 
 
 @dataclass
 class CommitmentTransaction:
-    transaction_id: int
-    channel_id: int
-    funding_address: str
-    balances: dict[str, int]
-    signatures: tuple[str, ...]
+    transaction_id: TransactionId
+    channel_id: ChannelId
+    funding_address: Address
+    balances: Balances
+    signatures: tuple[Signature, ...]
 
 
 @dataclass
 class Channel:
-    channel_id: int
-    funding_address: str
-    participants: tuple[str, ...]
-    capacity: int
-    balances: dict[str, int]
-    commitment_transactions: dict[int, CommitmentTransaction] = field(
+    channel_id: ChannelId
+    funding_address: Address
+    participants: tuple[PublicKey, ...]
+    capacity: Money
+    balances: Balances
+    commitment_transactions: dict[TransactionId, CommitmentTransaction] = field(
         default_factory=dict
     )
-    next_transaction_id: int = 0
+    next_transaction_id: TransactionId = 0
     is_open: bool = True
 
 
 class LightningNetwork:
     def __init__(self, blockchain: BlockChain):
         self.blockchain = blockchain
-        self.channels: dict[int, Channel] = {}
-        self.next_channel_id = 0
+        self.channels: dict[ChannelId, Channel] = {}
+        self.next_channel_id: ChannelId = 0
 
-    def open_channel(self, contributions: dict[str, int]) -> Channel:
+    def open_channel(self, contributions: Contributions) -> Channel:
         if len(contributions) != 2:
             raise ValueError("un canale Lightning base ha esattamente due partecipanti")
         if any(amount <= 0 for amount in contributions.values()):
@@ -57,7 +67,11 @@ class LightningNetwork:
         return channel
 
     def pay_in_channel(
-        self, channel_id: int, sender: str, recipient: str, amount: int
+        self,
+        channel_id: ChannelId,
+        sender: PublicKey,
+        recipient: PublicKey,
+        amount: Money,
     ) -> CommitmentTransaction:
         channel = self.get_open_channel(channel_id)
 
@@ -85,8 +99,11 @@ class LightningNetwork:
         return transaction
 
     def close_channel(
-        self, channel_id: int, transaction_id: int, signatures: list[str]
-    ) -> dict[str, int]:
+        self,
+        channel_id: ChannelId,
+        transaction_id: TransactionId,
+        signatures: list[Signature],
+    ) -> Balances:
         channel = self.get_open_channel(channel_id)
         funding_wallet = self.blockchain.get_address(channel.funding_address)
         transaction = self.get_commitment_transaction(channel, transaction_id)
@@ -105,7 +122,7 @@ class LightningNetwork:
         channel.is_open = False
         return dict(transaction.balances)
 
-    def get_open_channel(self, channel_id: int) -> Channel:
+    def get_open_channel(self, channel_id: ChannelId) -> Channel:
         if channel_id not in self.channels:
             raise ValueError("canale sconosciuto")
 
@@ -115,7 +132,7 @@ class LightningNetwork:
         return channel
 
     def get_commitment_transaction(
-        self, channel: Channel, transaction_id: int
+        self, channel: Channel, transaction_id: TransactionId
     ) -> CommitmentTransaction:
         if transaction_id not in channel.commitment_transactions:
             raise ValueError("commitment transaction sconosciuta")
