@@ -1,8 +1,9 @@
 from dataclasses import dataclass, field
-import hashlib
-import secrets
 
-from domain_types import ActorId, ActorName, PublicKey, SecretKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
+
+from domain_types import ActorId, ActorName, PublicKey, SecretKey, Signature
 
 
 @dataclass(frozen=True)
@@ -12,14 +13,26 @@ class Actor:
     public_key: PublicKey
     secret_key: SecretKey = field(repr=False)
 
+    def sign(self, payload: bytes) -> Signature:
+        private_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(self.secret_key))
+        return private_key.sign(payload).hex()
+
 
 class Actors:
     def __init__(self):
         self.actors: list[Actor] = []
 
     def create_actor(self, actor_id: ActorId, name: ActorName | None = None) -> Actor:
-        secret_key: SecretKey = secrets.token_hex(32)
-        public_key: PublicKey = hashlib.sha256(secret_key.encode()).hexdigest()
+        private_key = Ed25519PrivateKey.generate()
+        secret_key: SecretKey = private_key.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).hex()
+        public_key: PublicKey = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        ).hex()
 
         a = Actor(
             actor_id=actor_id,

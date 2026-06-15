@@ -3,7 +3,10 @@ from collections.abc import Iterable
 import hashlib
 import json
 
-from domain_types import Address, Money, PublicKey, Signature, Threshold
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+from domain_types import Address, Balances, Money, PublicKey, Signature, Threshold
 
 
 @dataclass
@@ -47,7 +50,8 @@ class BlockChain:
         from_address: Address,
         to_address: Address,
         amount: Money,
-        signatures: Iterable[Signature],
+        payload: bytes,
+        signatures: dict[PublicKey, Signature],
     ):
         if amount <= 0:
             raise ValueError("l'importo deve essere positivo")
@@ -55,11 +59,49 @@ class BlockChain:
         multi_sig_address = self.get_address(from_address)
         if amount > multi_sig_address.balance:
             raise ValueError("saldo insufficiente")
-        if not self.has_enough_valid_signatures(multi_sig_address, signatures):
+        if not self.has_enough_valid_signatures(
+            multi_sig_address, payload, signatures
+        ):
             raise ValueError("firme valide insufficienti")
 
         multi_sig_address.balance -= amount
         print(f"sent {amount} from {from_address} to {to_address}")
+
+    @staticmethod
+    def multisig_spend_payload(
+        from_address: Address,
+        outputs: Balances,
+        metadata: dict[str, int] | None = None,
+    ) -> bytes:
+        payload = {
+            "from_address": from_address,
+            "outputs": dict(outputs),
+            "metadata": metadata or {},
+        }
+        return json.dumps(payload, sort_keys=True).encode()
+
+    def spend_multisig(
+        self,
+        from_address: Address,
+        outputs: Balances,
+        signatures: dict[PublicKey, Signature],
+        metadata: dict[str, int] | None = None,
+    ):
+        if any(amount < 0 for amount in outputs.values()):
+            raise ValueError("gli output non possono essere negativi")
+
+        multi_sig_address = self.get_address(from_address)
+        amount = sum(outputs.values())
+        payload = self.multisig_spend_payload(from_address, outputs, metadata)
+        if amount != multi_sig_address.balance:
+            raise ValueError("gli output devono spendere l'intero multisig")
+        if not self.has_enough_valid_signatures(
+            multi_sig_address, payload, signatures
+        ):
+            raise ValueError("firme valide insufficienti")
+
+        multi_sig_address.balance = 0
+        print(f"sent {dict(outputs)} from {from_address}")
 
     def derive_address(
         self, public_keys: tuple[PublicKey, ...], threshold: Threshold
@@ -76,10 +118,28 @@ class BlockChain:
         return self.addresses[address]
 
     def has_enough_valid_signatures(
-        self, multi_sig_address: MultiSigAddress, signatures: Iterable[Signature]
+        self,
+        multi_sig_address: MultiSigAddress,
+        payload: bytes,
+        signatures: dict[PublicKey, Signature],
     ) -> bool:
-        valid_signers = set(signatures).intersection(multi_sig_address.public_keys)
+        valid_signers = set()
+        for public_key, signature in signatures.items():
+            if public_key not in multi_sig_address.public_keys:
+                continue
+            if self.is_valid_signature(public_key, payload, signature):
+                valid_signers.add(public_key)
         return len(valid_signers) >= multi_sig_address.threshold
+
+    def is_valid_signature(
+        self, public_key: PublicKey, payload: bytes, signature: Signature
+    ) -> bool:
+        try:
+            verifying_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key))
+            verifying_key.verify(bytes.fromhex(signature), payload)
+        except (ValueError, InvalidSignature):
+            return False
+        return True
 
     def __str__(self):
         return str(self.addresses)

@@ -19,7 +19,23 @@ class CommitmentTransaction:
     channel_id: ChannelId
     funding_address: Address
     balances: Balances
-    signatures: tuple[Signature, ...]
+    signatures: dict[PublicKey, Signature] = field(default_factory=dict)
+
+    def payload_metadata(self) -> dict[str, int]:
+        return {
+            "transaction_id": self.transaction_id,
+            "channel_id": self.channel_id,
+        }
+
+    def payload(self) -> bytes:
+        return BlockChain.multisig_spend_payload(
+            self.funding_address,
+            self.balances,
+            self.payload_metadata(),
+        )
+
+    def add_signature(self, public_key: PublicKey, signature: Signature):
+        self.signatures[public_key] = signature
 
 
 @dataclass
@@ -92,7 +108,6 @@ class LightningNetwork:
             channel_id=channel.channel_id,
             funding_address=channel.funding_address,
             balances=dict(channel.balances),
-            signatures=channel.participants,
         )
         channel.commitment_transactions[transaction.transaction_id] = transaction
         channel.next_transaction_id += 1
@@ -102,23 +117,25 @@ class LightningNetwork:
         self,
         channel_id: ChannelId,
         transaction_id: TransactionId,
-        signatures: list[Signature],
     ) -> Balances:
         channel = self.get_open_channel(channel_id)
         funding_wallet = self.blockchain.get_address(channel.funding_address)
         transaction = self.get_commitment_transaction(channel, transaction_id)
 
-        if not self.blockchain.has_enough_valid_signatures(funding_wallet, signatures):
-            raise ValueError("servono entrambe le firme per chiudere il canale")
         if not self.blockchain.has_enough_valid_signatures(
-            funding_wallet, list(transaction.signatures)
+            funding_wallet, transaction.payload(), transaction.signatures
         ):
             raise ValueError("la commitment transaction non e' firmata correttamente")
 
         if sum(transaction.balances.values()) != channel.capacity:
             raise ValueError("stato del canale incoerente")
 
-        funding_wallet.balance = 0
+        self.blockchain.spend_multisig(
+            funding_wallet.address,
+            transaction.balances,
+            transaction.signatures,
+            transaction.payload_metadata(),
+        )
         channel.is_open = False
         return dict(transaction.balances)
 
