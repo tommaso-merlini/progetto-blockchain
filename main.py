@@ -31,6 +31,7 @@ def main():
     print(f"tx{tx1.transaction_id} unlocks: {tx1.balances}")
     print(f"tx{tx2.transaction_id} unlocks: {tx2.balances}")
 
+    # TODO: invalidare le transazioni passate
     final_balances = ln.close_channel(
         channel.channel_id,
         tx2.transaction_id,

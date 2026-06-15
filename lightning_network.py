@@ -58,6 +58,7 @@ class LightningNetwork:
         self.channels: dict[ChannelId, Channel] = {}
         self.next_channel_id: ChannelId = 0
 
+    # crea un MultiSigAddress nella BC ed inizializza il channel bidirezionale nella LN
     def open_channel(self, contributions: Contributions) -> Channel:
         if len(contributions) != 2:
             raise ValueError("un canale Lightning base ha esattamente due partecipanti")
