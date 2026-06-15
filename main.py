@@ -19,27 +19,6 @@ def main():
     channel = ln.open_channel(funding_wallet.address)
     print(channel)
 
-    def create_signed_commitment(balances):
-        revocation_secrets = {
-            alice.public_key: ln.generate_revocation_secret(),
-            bob.public_key: ln.generate_revocation_secret(),
-        }
-        tx = ln.create_transaction(
-            channel.channel_id,
-            balances,
-            revocation_secrets,
-        )
-        tx.add_signature(alice.public_key, alice.sign(tx.payload()))
-        tx.add_signature(bob.public_key, bob.sign(tx.payload()))
-        return tx, revocation_secrets
-
-        # tx0, tx0_secrets = create_signed_commitment(
-        #     {
-        #         alice.public_key: 10,
-        #         bob.public_key: 5,
-        #     }
-        # )
-
     # tx0
     tx0_secrets = {
         alice.public_key: ln.generate_revocation_secret(),
