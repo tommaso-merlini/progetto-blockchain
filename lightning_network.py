@@ -72,17 +72,6 @@ class LightningNetwork:
             participants=participants,
             capacity=capacity,
         )
-        channel.commitments.append(
-            CommitmentTransaction(
-                transaction_id=0,
-                channel_id=channel.channel_id,
-                funding_address=channel.funding_address,
-                balances={
-                    participant: contributions[participant]
-                    for participant in participants
-                },
-            )
-        )
         self.channels[channel.channel_id] = channel
         self.next_channel_id += 1
         return channel

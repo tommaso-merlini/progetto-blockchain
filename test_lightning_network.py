@@ -90,9 +90,17 @@ class LightningSignatureTests(unittest.TestCase):
         funding_wallet = self.blockchain.get_address(self.channel.funding_address)
         self.assertEqual(funding_wallet.balance, 0)
 
-    def test_open_channel_creates_initial_commitment(self):
-        self.assertEqual(len(self.channel.commitments), 1)
-        initial_commitment = self.channel.commitments[0]
+    def test_open_channel_does_not_create_initial_commitment(self):
+        self.assertEqual(len(self.channel.commitments), 0)
+
+    def test_create_commitment_can_create_initial_commitment(self):
+        initial_commitment = self.lightning_network.create_commitment(
+            self.channel.channel_id,
+            {
+                self.alice.public_key: 10,
+                self.bob.public_key: 5,
+            },
+        )
 
         self.assertEqual(initial_commitment.transaction_id, 0)
         self.assertEqual(

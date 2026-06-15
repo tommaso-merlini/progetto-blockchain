@@ -14,7 +14,13 @@ def main():
     channel = ln.open_channel({alice.public_key: 10, bob.public_key: 5})
     print(channel)
 
-    tx0 = channel.commitments[0]
+    tx0 = ln.create_commitment(
+        channel.channel_id,
+        {
+            alice.public_key: 10,
+            bob.public_key: 5,
+        },
+    )
     tx0.add_signature(alice.public_key, alice.sign(tx0.payload()))
     tx0.add_signature(bob.public_key, bob.sign(tx0.payload()))
 
