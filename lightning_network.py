@@ -44,11 +44,7 @@ class Channel:
     funding_address: Address
     participants: tuple[PublicKey, ...]
     capacity: Money
-    balances: Balances
-    commitment_transactions: dict[TransactionId, CommitmentTransaction] = field(
-        default_factory=dict
-    )
-    next_transaction_id: TransactionId = 0
+    commitments: list[CommitmentTransaction] = field(default_factory=list)
     is_open: bool = True
 
 
@@ -75,43 +71,37 @@ class LightningNetwork:
             funding_address=funding_wallet.address,
             participants=participants,
             capacity=capacity,
-            balances={
-                participant: contributions[participant] for participant in participants
-            },
+        )
+        channel.commitments.append(
+            CommitmentTransaction(
+                transaction_id=0,
+                channel_id=channel.channel_id,
+                funding_address=channel.funding_address,
+                balances={
+                    participant: contributions[participant]
+                    for participant in participants
+                },
+            )
         )
         self.channels[channel.channel_id] = channel
         self.next_channel_id += 1
         return channel
 
-    def pay_in_channel(
+    def create_commitment(
         self,
         channel_id: ChannelId,
-        sender: PublicKey,
-        recipient: PublicKey,
-        amount: Money,
+        balances: Balances,
     ) -> CommitmentTransaction:
         channel = self.get_open_channel(channel_id)
+        self.validate_commitment_balances(channel, balances)
 
-        if sender not in channel.balances or recipient not in channel.balances:
-            raise ValueError("sender e recipient devono essere nel canale")
-        if amount <= 0:
-            raise ValueError("l'importo deve essere positivo")
-        if channel.balances[sender] < amount:
-            raise ValueError("saldo del sender insufficiente nel canale")
-
-        channel.balances[sender] -= amount
-        channel.balances[recipient] += amount
-        return self.create_commitment_transaction(channel)
-
-    def create_commitment_transaction(self, channel: Channel) -> CommitmentTransaction:
         transaction = CommitmentTransaction(
-            transaction_id=channel.next_transaction_id,
+            transaction_id=len(channel.commitments),
             channel_id=channel.channel_id,
             funding_address=channel.funding_address,
-            balances=dict(channel.balances),
+            balances=dict(balances),
         )
-        channel.commitment_transactions[transaction.transaction_id] = transaction
-        channel.next_transaction_id += 1
+        channel.commitments.append(transaction)
         return transaction
 
     def close_channel(
@@ -128,8 +118,7 @@ class LightningNetwork:
         ):
             raise ValueError("la commitment transaction non e' firmata correttamente")
 
-        if sum(transaction.balances.values()) != channel.capacity:
-            raise ValueError("stato del canale incoerente")
+        self.validate_commitment_balances(channel, transaction.balances)
 
         self.blockchain.spend_multisig(
             funding_wallet.address,
@@ -152,6 +141,17 @@ class LightningNetwork:
     def get_commitment_transaction(
         self, channel: Channel, transaction_id: TransactionId
     ) -> CommitmentTransaction:
-        if transaction_id not in channel.commitment_transactions:
-            raise ValueError("commitment transaction sconosciuta")
-        return channel.commitment_transactions[transaction_id]
+        for transaction in channel.commitments:
+            if transaction.transaction_id == transaction_id:
+                return transaction
+        raise ValueError("commitment transaction sconosciuta")
+
+    def validate_commitment_balances(self, channel: Channel, balances: Balances):
+        if set(balances) != set(channel.participants):
+            raise ValueError(
+                "i balances devono contenere esattamente i partecipanti del canale"
+            )
+        if any(amount < 0 for amount in balances.values()):
+            raise ValueError("i balances non possono essere negativi")
+        if sum(balances.values()) != channel.capacity:
+            raise ValueError("stato del canale incoerente")

@@ -18,12 +18,13 @@ class LightningSignatureTests(unittest.TestCase):
             {self.alice.public_key: 10, self.bob.public_key: 5}
         )
 
-    def create_payment(self):
-        return self.lightning_network.pay_in_channel(
+    def create_commitment(self):
+        return self.lightning_network.create_commitment(
             self.channel.channel_id,
-            self.alice.public_key,
-            self.bob.public_key,
-            2,
+            {
+                self.alice.public_key: 8,
+                self.bob.public_key: 7,
+            },
         )
 
     def sign_with_both_participants(self, transaction):
@@ -37,7 +38,7 @@ class LightningSignatureTests(unittest.TestCase):
         )
 
     def test_close_requires_commitment_signatures(self):
-        transaction = self.create_payment()
+        transaction = self.create_commitment()
 
         with self.assertRaisesRegex(ValueError, "firmata correttamente"):
             self.lightning_network.close_channel(
@@ -46,7 +47,7 @@ class LightningSignatureTests(unittest.TestCase):
             )
 
     def test_signature_must_match_declared_public_key(self):
-        transaction = self.create_payment()
+        transaction = self.create_commitment()
         transaction.add_signature(
             self.alice.public_key,
             self.alice.sign(transaction.payload()),
@@ -63,7 +64,7 @@ class LightningSignatureTests(unittest.TestCase):
             )
 
     def test_signature_covers_commitment_payload(self):
-        transaction = self.create_payment()
+        transaction = self.create_commitment()
         self.sign_with_both_participants(transaction)
         transaction.balances[self.alice.public_key] -= 1
         transaction.balances[self.bob.public_key] += 1
@@ -75,7 +76,7 @@ class LightningSignatureTests(unittest.TestCase):
             )
 
     def test_valid_signed_commitment_closes_channel(self):
-        transaction = self.create_payment()
+        transaction = self.create_commitment()
         self.sign_with_both_participants(transaction)
 
         with contextlib.redirect_stdout(io.StringIO()):
@@ -88,6 +89,29 @@ class LightningSignatureTests(unittest.TestCase):
         self.assertFalse(self.channel.is_open)
         funding_wallet = self.blockchain.get_address(self.channel.funding_address)
         self.assertEqual(funding_wallet.balance, 0)
+
+    def test_open_channel_creates_initial_commitment(self):
+        self.assertEqual(len(self.channel.commitments), 1)
+        initial_commitment = self.channel.commitments[0]
+
+        self.assertEqual(initial_commitment.transaction_id, 0)
+        self.assertEqual(
+            initial_commitment.balances,
+            {
+                self.alice.public_key: 10,
+                self.bob.public_key: 5,
+            },
+        )
+
+    def test_commitment_balances_must_match_channel_capacity(self):
+        with self.assertRaisesRegex(ValueError, "stato del canale incoerente"):
+            self.lightning_network.create_commitment(
+                self.channel.channel_id,
+                {
+                    self.alice.public_key: 8,
+                    self.bob.public_key: 8,
+                },
+            )
 
 
 if __name__ == "__main__":
