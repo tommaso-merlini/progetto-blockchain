@@ -19,11 +19,14 @@ def main():
     channel = ln.open_channel(funding_wallet.address)
     print(channel)
 
-    # tx0
+    # ========tx0============
+    # creazione segreti tx0
     tx0_secrets = {
         alice.public_key: ln.generate_revocation_secret(),
         bob.public_key: ln.generate_revocation_secret(),
     }
+
+    # creazione transazione tx0
     tx0 = ln.create_transaction(
         channel.channel_id,
         {
@@ -32,14 +35,19 @@ def main():
         },
         tx0_secrets,
     )
+
+    # i due attori firmano la transazione tx0
     tx0.add_signature(alice.public_key, alice.sign(tx0.payload()))
     tx0.add_signature(bob.public_key, bob.sign(tx0.payload()))
 
-    # tx1
+    # ========tx1============
+    # creazione segreti tx1
     tx1_secrets = {
         alice.public_key: ln.generate_revocation_secret(),
         bob.public_key: ln.generate_revocation_secret(),
     }
+
+    # creazione transazione tx1
     tx1 = ln.create_transaction(
         channel.channel_id,
         {
@@ -48,22 +56,26 @@ def main():
         },
         tx1_secrets,
     )
+
+    # i due attori firmano la transazione tx1
     tx1.add_signature(alice.public_key, alice.sign(tx1.payload()))
     tx1.add_signature(bob.public_key, bob.sign(tx1.payload()))
+
+    # i due attori si rivelano i segreti della transazione precedente (tx0)
     ln.reveal_revocation_secret(
         channel.channel_id,
-        tx1.transaction_id,
+        tx0.transaction_id,
         alice.public_key,
-        tx1_secrets[alice.public_key],
+        tx0_secrets[alice.public_key],
     )
     ln.reveal_revocation_secret(
         channel.channel_id,
-        tx1.transaction_id,
+        tx0.transaction_id,
         bob.public_key,
-        tx1_secrets[bob.public_key],
+        tx0_secrets[bob.public_key],
     )
 
-    # tx2
+    # ========tx2============
     tx2_secrets = {
         alice.public_key: ln.generate_revocation_secret(),
         bob.public_key: ln.generate_revocation_secret(),
@@ -76,19 +88,23 @@ def main():
         },
         tx2_secrets,
     )
+
+    # i due attori firmano la transazione tx0
     tx2.add_signature(alice.public_key, alice.sign(tx2.payload()))
     tx2.add_signature(bob.public_key, bob.sign(tx2.payload()))
+
+    # i due attori si rivelano i segreti della transazione precedente (tx1)
     ln.reveal_revocation_secret(
         channel.channel_id,
-        tx2.transaction_id,
+        tx1.transaction_id,
         alice.public_key,
-        tx2_secrets[alice.public_key],
+        tx1_secrets[alice.public_key],
     )
     ln.reveal_revocation_secret(
         channel.channel_id,
-        tx2.transaction_id,
+        tx1.transaction_id,
         bob.public_key,
-        tx2_secrets[bob.public_key],
+        tx1_secrets[bob.public_key],
     )
 
     # Bob prova a chiudere on-chain con tx1, che e' vecchia rispetto a tx2.
