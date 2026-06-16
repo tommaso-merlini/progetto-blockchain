@@ -19,6 +19,8 @@ def main():
     channel = ln.open_channel(funding_wallet.address)
     print(channel)
 
+    # TODO: i segreti non dovrebbero essere memorizzati nella transazione cosi: dovrebbero essere criptati
+
     # ========tx0============
     # creazione segreti tx0
     tx0_secrets = {
