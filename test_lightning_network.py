@@ -20,20 +20,25 @@ class LightningSignatureTests(unittest.TestCase):
         self.channel = self.lightning_network.open_channel(self.funding_wallet.address)
 
     def create_commitment(self):
-        secrets = self.create_revocation_secrets()
+        transaction_id = self.lightning_network.next_transaction_id(
+            self.channel.channel_id
+        )
         return self.lightning_network.create_commitment(
             self.channel.channel_id,
             {
                 self.alice.public_key: 8,
                 self.bob.public_key: 7,
             },
-            secrets,
+            self.create_revocation_hashes(transaction_id),
         )
 
-    def create_revocation_secrets(self):
+    def create_revocation_hashes(self, transaction_id):
         return {
-            self.alice.public_key: self.lightning_network.generate_revocation_secret(),
-            self.bob.public_key: self.lightning_network.generate_revocation_secret(),
+            actor.public_key: actor.create_revocation_hash(
+                self.channel.channel_id,
+                transaction_id,
+            )
+            for actor in (self.alice, self.bob)
         }
 
     def sign_with_both_participants(self, transaction):
@@ -120,14 +125,16 @@ class LightningSignatureTests(unittest.TestCase):
             self.lightning_network.open_channel(funding_wallet.address)
 
     def test_create_commitment_can_create_initial_commitment(self):
-        secrets = self.create_revocation_secrets()
+        transaction_id = self.lightning_network.next_transaction_id(
+            self.channel.channel_id
+        )
         initial_commitment = self.lightning_network.create_commitment(
             self.channel.channel_id,
             {
                 self.alice.public_key: 10,
                 self.bob.public_key: 5,
             },
-            secrets,
+            self.create_revocation_hashes(transaction_id),
         )
 
         self.assertEqual(initial_commitment.transaction_id, 0)
@@ -138,38 +145,45 @@ class LightningSignatureTests(unittest.TestCase):
                 self.bob.public_key: 5,
             },
         )
-        self.assertEqual(set(initial_commitment.revocation_hashes), set(secrets))
+        self.assertEqual(
+            set(initial_commitment.revocation_hashes),
+            {self.alice.public_key, self.bob.public_key},
+        )
 
     def test_commitment_balances_must_match_channel_capacity(self):
         with self.assertRaisesRegex(ValueError, "stato del canale incoerente"):
+            transaction_id = self.lightning_network.next_transaction_id(
+                self.channel.channel_id
+            )
             self.lightning_network.create_commitment(
                 self.channel.channel_id,
                 {
                     self.alice.public_key: 8,
                     self.bob.public_key: 8,
                 },
-                self.create_revocation_secrets(),
+                self.create_revocation_hashes(transaction_id),
             )
 
     def test_revealed_secret_punishes_old_commitment_on_chain(self):
-        tx0_secrets = self.create_revocation_secrets()
+        tx0_id = self.lightning_network.next_transaction_id(self.channel.channel_id)
         tx0 = self.lightning_network.create_commitment(
             self.channel.channel_id,
             {
                 self.alice.public_key: 10,
                 self.bob.public_key: 5,
             },
-            tx0_secrets,
+            self.create_revocation_hashes(tx0_id),
         )
         self.sign_with_both_participants(tx0)
 
+        tx1_id = self.lightning_network.next_transaction_id(self.channel.channel_id)
         tx1 = self.lightning_network.create_commitment(
             self.channel.channel_id,
             {
                 self.alice.public_key: 8,
                 self.bob.public_key: 7,
             },
-            self.create_revocation_secrets(),
+            self.create_revocation_hashes(tx1_id),
         )
         self.sign_with_both_participants(tx1)
 
@@ -177,7 +191,7 @@ class LightningSignatureTests(unittest.TestCase):
             self.channel.channel_id,
             tx0.transaction_id,
             self.bob.public_key,
-            tx0_secrets[self.bob.public_key],
+            self.bob.get_revocation_secret(tx0.transaction_id),
         )
 
         self.lightning_network.publish_commitment(

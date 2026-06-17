@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-import secrets
 from typing import Any
 
 from blockchain import BlockChain
@@ -85,10 +84,11 @@ class LightningNetwork:
         self,
         channel_id: ChannelId,
         balances: Balances,
-        revocation_secrets: dict[PublicKey, RevocationSecret] | None = None,
+        revocation_hashes: dict[PublicKey, RevocationHash] | None = None,
     ) -> CommitmentTransaction:
         channel = self.get_open_channel(channel_id)
         self.validate_commitment_balances(channel, balances)
+        self.validate_revocation_hashes(channel, revocation_hashes)
         transaction_id = len(channel.commitments)
 
         transaction = CommitmentTransaction(
@@ -96,11 +96,7 @@ class LightningNetwork:
             channel_id=channel.channel_id,
             funding_address=channel.funding_address,
             balances=dict(balances),
-            revocation_hashes=self.build_revocation_hashes(
-                channel,
-                transaction_id,
-                revocation_secrets,
-            ),
+            revocation_hashes=dict(revocation_hashes or {}),
         )
         channel.commitments.append(transaction)
         return transaction
@@ -109,9 +105,9 @@ class LightningNetwork:
         self,
         channel_id: ChannelId,
         balances: Balances,
-        revocation_secrets: dict[PublicKey, RevocationSecret] | None = None,
+        revocation_hashes: dict[PublicKey, RevocationHash] | None = None,
     ) -> CommitmentTransaction:
-        return self.create_transaction(channel_id, balances, revocation_secrets)
+        return self.create_transaction(channel_id, balances, revocation_hashes)
 
     def reveal_revocation_secret(
         self,
@@ -228,6 +224,10 @@ class LightningNetwork:
                 return transaction
         raise ValueError("commitment transaction sconosciuta")
 
+    def next_transaction_id(self, channel_id: ChannelId) -> TransactionId:
+        channel = self.get_open_channel(channel_id)
+        return len(channel.commitments)
+
     def validate_commitment_balances(self, channel: Channel, balances: Balances):
         if set(balances) != set(channel.participants):
             raise ValueError(
@@ -238,26 +238,12 @@ class LightningNetwork:
         if sum(balances.values()) != channel.capacity:
             raise ValueError("stato del canale incoerente")
 
-    def build_revocation_hashes(
+    def validate_revocation_hashes(
         self,
         channel: Channel,
-        transaction_id: TransactionId,
-        revocation_secrets: dict[PublicKey, RevocationSecret] | None,
-    ) -> dict[PublicKey, RevocationHash]:
-        if revocation_secrets is None:
-            return {}
-        if set(revocation_secrets) != set(channel.participants):
-            raise ValueError("mancano revocation secret")
-        return {
-            public_key: BlockChain.revocation_hash(
-                channel.channel_id,
-                transaction_id,
-                public_key,
-                secret,
-            )
-            for public_key, secret in revocation_secrets.items()
-        }
-
-    @staticmethod
-    def generate_revocation_secret() -> RevocationSecret:
-        return secrets.token_hex(32)
+        revocation_hashes: dict[PublicKey, RevocationHash] | None,
+    ):
+        if revocation_hashes is None:
+            return
+        if set(revocation_hashes) != set(channel.participants):
+            raise ValueError("mancano revocation hash")

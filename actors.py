@@ -1,21 +1,58 @@
 from dataclasses import dataclass, field
+import secrets
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
-from domain_types import ActorId, ActorName, PublicKey, SecretKey, Signature
+from blockchain import BlockChain
+from domain_types import (
+    ActorId,
+    ActorName,
+    ChannelId,
+    PublicKey,
+    RevocationHash,
+    RevocationSecret,
+    SecretKey,
+    Signature,
+    TransactionId,
+)
 
 
-@dataclass(frozen=True)
+@dataclass
 class Actor:
     actor_id: ActorId
     name: ActorName
     public_key: PublicKey
     secret_key: SecretKey = field(repr=False)
+    revocation_secrets: dict[TransactionId, RevocationSecret] = field(
+        default_factory=dict,
+        repr=False,
+    )
 
     def sign(self, payload: bytes) -> Signature:
         private_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(self.secret_key))
         return private_key.sign(payload).hex()
+
+    def create_revocation_secret(self, transaction_id: TransactionId) -> RevocationSecret:
+        secret = secrets.token_hex(32)
+        self.revocation_secrets[transaction_id] = secret
+        return secret
+
+    def get_revocation_secret(self, transaction_id: TransactionId) -> RevocationSecret:
+        return self.revocation_secrets[transaction_id]
+
+    def create_revocation_hash(
+        self,
+        channel_id: ChannelId,
+        transaction_id: TransactionId,
+    ) -> RevocationHash:
+        secret = self.create_revocation_secret(transaction_id)
+        return BlockChain.revocation_hash(
+            channel_id,
+            transaction_id,
+            self.public_key,
+            secret,
+        )
 
 
 class Actors:
