@@ -169,6 +169,37 @@ class TestSection1_Direct(LightningTestBase):
             self.bc.claim_htlc_timeout(self.ms.address, 7)
         self.print_snapshot("D7", "TIMEOUT BREVE", "Blocco rimborso", "10/10")
 
+    def test_d8_punizione_frode(self):
+        self.add_step("Stato 0: Alice=12, Bob=8 (Nessun segreto ancora scambiato)")
+        self.alice.sync_state_with(self.bob, self.cid, {self.alice.pub_key: 12, self.bob.pub_key: 8}, [])
+        
+        self.add_step("Stato 1: Alice paga Bob. Nuovi saldi: Alice=5, Bob=15. Viene scambiato il segreto dello Stato 0")
+        self.alice.sync_state_with(self.bob, self.cid, {self.alice.pub_key: 5, self.bob.pub_key: 15}, [])
+        
+        self.add_step("Frode: Alice pubblica maliziosamente il vecchio Stato 0 su Chain per riprendersi 12 monete")
+        old_tx = self.alice.channels[self.cid].commitments[0]
+        self.bc.publish_commitment(
+            self.ms.address, 
+            old_tx.balances, 
+            old_tx.htlcs, 
+            old_tx.signatures, 
+            {"channel_id": self.cid, "transaction_id": 0}, 
+            self.alice.pub_key, 
+            old_tx.revocation_hashes
+        )
+        
+        self.add_step("Punizione: Bob rileva la frode, estrae il segreto di revoca di Alice e reclama tutti i fondi")
+        # Bob recupera dai suoi stati locali il segreto che Alice gli ha dato per invalidare la transazione 0
+        revocation_secret = self.bob.channels[self.cid].counterparty_secrets[0]
+        self.bc.punish_commitment(self.ms.address, self.bob.pub_key, revocation_secret)
+        
+        # ASSERT: Bob deve aver ottenuto l'intera capacità del canale (20 monete), Alice 0
+        res = self.get_final_chain_balances(self.ms.address)
+        self.assertEqual(res.get('Alice', 0), 0)
+        self.assertEqual(res.get('Bob', 0), 20)
+        
+        self.print_snapshot("D8", "PUNIZIONE FRODE (LN-PENALTY)", "Alice=0, Bob=20 (Punizione)", "Iniziale: 10/10")
+
 class TestSection2_Chain(LightningTestBase):
     def setUp(self):
         super().setUp()
