@@ -1,9 +1,7 @@
-[ ] invalidare le vecchie transazioni
-	[x] ogni volta che si aggiorna il canale i due attori si devono scambiare un segreto sulla transazione precedente
-
-	[x] entro quanto puoi riscattare i tuoi soldi se provano a validare una transazione vecchia? => TIME LOCK
-
-	[ ] spostare tutta la logica del lightning network negli attori, sono gli attori DECENTRALIZZATI a dover tener traccia dello stato, non la classe CENTRALIZZATA lightning network
+[x] invalidare le vecchie transazioni
+[x] ogni volta che si aggiorna il canale i due attori si devono scambiare un segreto sulla transazione precedente
+[x] entro quanto puoi riscattare i tuoi soldi se provano a validare una transazione vecchia? => TIME LOCK
+[x] spostare tutta la logica del lightning network negli attori, sono gli attori DECENTRALIZZATI a dover tener traccia dello stato, non la classe CENTRALIZZATA lightning network
 		Una versione minima funzionante potrebbe avere questo protocollo:
 		  1. Alice propone tx1.
 		  2. Bob verifica tx1.
@@ -14,6 +12,7 @@
 		  7. Bob rivela il suo secret di tx0.
 		  8. Alice verifica e salva il secret di Bob.
 
-	[ ] come entra in gioco l'hash time lock?
+[x] come entra in gioco l'hash time lock?
+	i soldi vengono messi in un "limbo" (HTLC). Viene risolto on-chain o tramite il segreto (Hash Lock) o tramite il tempo (Time Lock). I test che abbiamo scritto (test_htlc_success e test_htlc_timeout) dimostrano esattamente questo.
 
-	[ ] implementare grafo su lightning network
+[ ] implementare grafo su lightning network

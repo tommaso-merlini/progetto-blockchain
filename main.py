@@ -1,133 +1,71 @@
-from actors import Actors
 from blockchain import BlockChain
-from lightning_network import LightningNetwork
+from actors import Actor
+from domain_types import HTLC
 
+def run_multi_hop_demo():
+    print("\n=== LIGHTNING NETWORK: MULTI-HOP DEMO (Alice -> Carol -> Dave -> Bob) ===")
+    bc = BlockChain(verbose=True)
+    
+    # Inizializzazione Nodi
+    alice = Actor("Alice", verbose=True)
+    carol = Actor("Carol", verbose=True)
+    dave = Actor("Dave", verbose=True)
+    bob = Actor("Bob", verbose=True)
 
-def main():
-    bc = BlockChain()
-    ln = LightningNetwork(bc)
-    ac = Actors()
+    # 1. Apertura Canali (Il Grafo)
+    # Alice <-> Carol
+    ms_ac = bc.create_multi_sig_address({alice.pub_key: 10, carol.pub_key: 10}, 2)
+    cid_ac = 1
+    alice.init_channel(cid_ac, ms_ac.address, carol.pub_key, 20)
+    carol.init_channel(cid_ac, ms_ac.address, alice.pub_key, 20)
 
-    alice = ac.create_actor("alice", "Alice")
-    bob = ac.create_actor("bob", "Bob")
+    # Carol <-> Dave
+    ms_cd = bc.create_multi_sig_address({carol.pub_key: 10, dave.pub_key: 10}, 2)
+    cid_cd = 2
+    carol.init_channel(cid_cd, ms_cd.address, dave.pub_key, 20)
+    dave.init_channel(cid_cd, ms_cd.address, carol.pub_key, 20)
 
-    funding_wallet = bc.create_multi_sig_address(
-        {alice.public_key: 10, bob.public_key: 5},
-        2,
-    )
+    # Dave <-> Bob
+    ms_db = bc.create_multi_sig_address({dave.pub_key: 10, bob.pub_key: 10}, 2)
+    cid_db = 3
+    dave.init_channel(cid_db, ms_db.address, bob.pub_key, 20)
+    bob.init_channel(cid_db, ms_db.address, dave.pub_key, 20)
 
-    channel = ln.open_channel(funding_wallet.address)
-    print(channel)
+    # 2. Bob genera una fattura (Payment Hash)
+    p_hash = bob.create_payment_hash()
+    print(f"\n[INFO] Bob ha generato il Payment Hash: {p_hash[:10]}...")
 
-    def collect_revocation_hashes(transaction_id, actors):
-        return {
-            actor.public_key: actor.create_revocation_hash(
-                channel.channel_id,
-                transaction_id,
-            )
-            for actor in actors
-        }
+    # 3. Costruzione della catena di HTLC (Forwarding)
+    print("\n--- STEP 1: Alice blocca i fondi verso Carol ---")
+    h1 = HTLC(1, 5, p_hash, 40, alice.pub_key, carol.pub_key)
+    alice.sync_state_with(carol, cid_ac, {alice.pub_key: 5, carol.pub_key: 10}, [h1])
 
-    # ========tx0============
-    tx0_id = ln.next_transaction_id(channel.channel_id)
-    tx0_hashes = collect_revocation_hashes(tx0_id, (alice, bob))
+    print("\n--- STEP 2: Carol blocca i fondi verso Dave ---")
+    h2 = HTLC(2, 5, p_hash, 30, carol.pub_key, dave.pub_key)
+    carol.sync_state_with(dave, cid_cd, {carol.pub_key: 5, dave.pub_key: 10}, [h2])
 
-    # creazione transazione tx0
-    tx0 = ln.create_transaction(
-        channel.channel_id,
-        {
-            alice.public_key: 10,
-            bob.public_key: 5,
-        },
-        tx0_hashes,
-    )
+    print("\n--- STEP 3: Dave blocca i fondi verso Bob ---")
+    h3 = HTLC(3, 5, p_hash, 20, dave.pub_key, bob.pub_key)
+    dave.sync_state_with(bob, cid_db, {dave.pub_key: 5, bob.pub_key: 10}, [h3])
 
-    # i due attori firmano la transazione tx0
-    tx0.add_signature(alice.public_key, alice.sign(tx0.payload()))
-    tx0.add_signature(bob.public_key, bob.sign(tx0.payload()))
+    # 4. Risoluzione della catena (Bob rivela il segreto a ritroso)
+    secret = bob.payment_secrets[p_hash]
+    print(f"\n--- STEP 4: Bob rivela il segreto {secret[:8]}... a Dave ---")
+    # Dave scopre il segreto, aggiornano il canale DB: rimuovono HTLC e aggiornano bilanci
+    dave.known_secrets[p_hash] = secret
+    dave.sync_state_with(bob, cid_db, {dave.pub_key: 5, bob.pub_key: 15}, [])
 
-    # ========tx1============
-    tx1_id = ln.next_transaction_id(channel.channel_id)
-    tx1_hashes = collect_revocation_hashes(tx1_id, (alice, bob))
+    print("\n--- STEP 5: Dave rivela il segreto a Carol ---")
+    carol.known_secrets[p_hash] = secret
+    carol.sync_state_with(dave, cid_cd, {carol.pub_key: 5, dave.pub_key: 15}, [])
 
-    # creazione transazione tx1
-    tx1 = ln.create_transaction(
-        channel.channel_id,
-        {
-            alice.public_key: 8,
-            bob.public_key: 7,
-        },
-        tx1_hashes,
-    )
+    print("\n--- STEP 6: Carol rivela il segreto ad Alice ---")
+    alice.known_secrets[p_hash] = secret
+    alice.sync_state_with(carol, cid_ac, {alice.pub_key: 5, carol.pub_key: 15}, [])
 
-    # i due attori firmano la transazione tx1
-    tx1.add_signature(alice.public_key, alice.sign(tx1.payload()))
-    tx1.add_signature(bob.public_key, bob.sign(tx1.payload()))
-
-    # i due attori si rivelano i segreti della transazione precedente (tx0)
-    ln.reveal_revocation_secret(
-        channel.channel_id,
-        tx0.transaction_id,
-        alice.public_key,
-        alice.get_revocation_secret(tx0.transaction_id),
-    )
-    ln.reveal_revocation_secret(
-        channel.channel_id,
-        tx0.transaction_id,
-        bob.public_key,
-        bob.get_revocation_secret(tx0.transaction_id),
-    )
-
-    # ========tx2============
-    tx2_id = ln.next_transaction_id(channel.channel_id)
-    tx2_hashes = collect_revocation_hashes(tx2_id, (alice, bob))
-    tx2 = ln.create_transaction(
-        channel.channel_id,
-        {
-            alice.public_key: 9,
-            bob.public_key: 6,
-        },
-        tx2_hashes,
-    )
-
-    # i due attori firmano la transazione tx2
-    tx2.add_signature(alice.public_key, alice.sign(tx2.payload()))
-    tx2.add_signature(bob.public_key, bob.sign(tx2.payload()))
-
-    # i due attori si rivelano i segreti della transazione precedente (tx1)
-    ln.reveal_revocation_secret(
-        channel.channel_id,
-        tx1.transaction_id,
-        alice.public_key,
-        alice.get_revocation_secret(tx1.transaction_id),
-    )
-    ln.reveal_revocation_secret(
-        channel.channel_id,
-        tx1.transaction_id,
-        bob.public_key,
-        bob.get_revocation_secret(tx1.transaction_id),
-    )
-
-    # Bob prova a chiudere on-chain con tx1, che e' vecchia rispetto a tx2.
-    ln.publish_commitment(
-        channel.channel_id,
-        tx1.transaction_id,
-        broadcaster=bob.public_key,
-        challenge_period=2,
-    )
-    bob_tx1_secret = ln.get_revealed_revocation_secret(
-        channel.channel_id,
-        tx1.transaction_id,
-        bob.public_key,
-    )
-    final_balances = bc.punish_commitment(
-        funding_wallet.address,
-        punished_party=bob.public_key,
-        beneficiary=alice.public_key,
-        secret=bob_tx1_secret,
-    )
-    print(f"punishment balances: {final_balances}")
-
+    print("\n=== PAGAMENTO COMPLETATO! ===")
+    print(f"Alice (Mittente) bilancio finale: {alice.channels[cid_ac].commitments[-1].balances[alice.pub_key]}")
+    print(f"Bob (Destinatario) bilancio finale: {bob.channels[cid_db].commitments[-1].balances[bob.pub_key]}")
 
 if __name__ == "__main__":
-    main()
+    run_multi_hop_demo()
