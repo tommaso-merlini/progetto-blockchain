@@ -1,51 +1,71 @@
-from __future__ import annotations
-
-import argparse
+import re
 import sys
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
+
+import uvicorn
 
 
-class RequestHandler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:
-        body = b"Server is running\n"
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+async def app(scope, receive, send):
+    body = b""
+    while (message := await receive())["type"] == "http.request":
+        body += message.get("body", b"")
+        if not message.get("more_body"):
+            break
 
+    if scope["method"] != "POST" or scope["path"] != "/command":
+        status, body, content_type = 404, b"Not Found\n", b"text/plain;charset=UTF-8"
+    else:
+        text = body.decode(errors="replace")
+        print(f"\n{text}")
+        print("> ", end="", flush=True)
+        status, content_type = 200, b"text/plain; charset=utf-8"
 
-def read_command() -> None:
-    for line in sys.stdin:
-        command = line.rstrip("\r\n")
-        print(f"server echoed: {command}", flush=True)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run an HTTP server and echo commands received on stdin."
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [(b"content-type", content_type)],
+        }
     )
-    parser.add_argument("port", type=int, help="TCP port on which to listen")
-    args = parser.parse_args()
-    if not 1 <= args.port <= 65535:
-        parser.error("port must be between 1 and 65535")
-    return args
+    await send({"type": "http.response.body", "body": body})
+
+
+def read_command(c: str):
+    print(c)
 
 
 def main() -> None:
-    args = parse_args()
-    cli_thread = threading.Thread(target=read_command, daemon=True)
-    cli_thread.start()
+    argument = sys.argv[1] if len(sys.argv) > 1 else ""
+    if (
+        not re.fullmatch(r"[0-9]+", argument)
+        or not 1 <= (port := int(argument)) <= 65_535
+    ):
+        raise SystemExit("Usage: python main.py <port>")
 
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), RequestHandler)
-    print(f"Listening on port {args.port}", flush=True)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host="0.0.0.0",
+            port=port,
+            log_level="critical",
+            access_log=False,
+            lifespan="off",
+        )
+    )
+    thread = Thread(target=server.run)
+    thread.start()
+    print(f"Listening on http://0.0.0.0:{port}")
+
     try:
-        server.serve_forever()
+        while True:
+            try:
+                read_command(input("> "))
+            except EOFError:
+                thread.join()
     except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+        print()
+        server.should_exit = True
+        thread.join()
 
 
 if __name__ == "__main__":
