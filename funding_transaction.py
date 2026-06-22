@@ -22,12 +22,10 @@ class FundingTransaction:
     output: MultisigOutput
 
     def serialize(self) -> bytes:
-        return json.dumps(
-            asdict(self), sort_keys=True, separators=(",", ":")
-        ).encode()
+        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode()
 
     @property
-    def txid(self) -> str:
+    def id(self) -> str:
         return hashlib.sha256(self.serialize()).hexdigest()
 
 
