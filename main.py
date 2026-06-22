@@ -17,108 +17,85 @@ def main():
     )
 
     channel = ln.open_channel(funding_wallet.address)
+    alice.open_local_channel(channel, bob.public_key)
+    bob.open_local_channel(channel, alice.public_key)
     print(channel)
 
-    def collect_revocation_hashes(transaction_id, actors):
+    def collect_revocation_hashes(transaction_id):
         return {
-            actor.public_key: actor.create_revocation_hash(
+            actor.public_key: actor.create_channel_revocation_hash(
                 channel.channel_id,
                 transaction_id,
             )
-            for actor in actors
+            for actor in (alice, bob)
         }
 
-    # ========tx0============
-    tx0_id = ln.next_transaction_id(channel.channel_id)
-    tx0_hashes = collect_revocation_hashes(tx0_id, (alice, bob))
+    def update_channel(proposer, receiver, balances):
+        transaction_id = proposer.get_local_channel(
+            channel.channel_id
+        ).next_transaction_id
+        transaction = proposer.propose_commitment(
+            ln,
+            channel.channel_id,
+            balances,
+            collect_revocation_hashes(transaction_id),
+        )
+        receiver.receive_commitment_proposal(ln, transaction, proposer.public_key)
+        proposer.receive_signed_commitment(ln, transaction, receiver.public_key)
+        return transaction
 
-    # creazione transazione tx0
-    tx0 = ln.create_transaction(
-        channel.channel_id,
+    tx0 = update_channel(
+        alice,
+        bob,
         {
             alice.public_key: 10,
             bob.public_key: 5,
         },
-        tx0_hashes,
     )
 
-    # i due attori firmano la transazione tx0
-    tx0.add_signature(alice.public_key, alice.sign(tx0.payload()))
-    tx0.add_signature(bob.public_key, bob.sign(tx0.payload()))
-
-    # ========tx1============
-    tx1_id = ln.next_transaction_id(channel.channel_id)
-    tx1_hashes = collect_revocation_hashes(tx1_id, (alice, bob))
-
-    # creazione transazione tx1
-    tx1 = ln.create_transaction(
-        channel.channel_id,
+    tx1 = update_channel(
+        alice,
+        bob,
         {
             alice.public_key: 8,
             bob.public_key: 7,
         },
-        tx1_hashes,
     )
 
-    # i due attori firmano la transazione tx1
-    tx1.add_signature(alice.public_key, alice.sign(tx1.payload()))
-    tx1.add_signature(bob.public_key, bob.sign(tx1.payload()))
-
-    # i due attori si rivelano i segreti della transazione precedente (tx0)
-    ln.reveal_revocation_secret(
+    alice_tx0_secret = alice.reveal_previous_secret(
         channel.channel_id,
         tx0.transaction_id,
-        alice.public_key,
-        alice.get_revocation_secret(tx0.transaction_id),
     )
-    ln.reveal_revocation_secret(
-        channel.channel_id,
-        tx0.transaction_id,
-        bob.public_key,
-        bob.get_revocation_secret(tx0.transaction_id),
-    )
+    bob.receive_revocation_secret(tx0, alice.public_key, alice_tx0_secret)
+    bob_tx0_secret = bob.reveal_previous_secret(channel.channel_id, tx0.transaction_id)
+    alice.receive_revocation_secret(tx0, bob.public_key, bob_tx0_secret)
 
-    # ========tx2============
-    tx2_id = ln.next_transaction_id(channel.channel_id)
-    tx2_hashes = collect_revocation_hashes(tx2_id, (alice, bob))
-    tx2 = ln.create_transaction(
-        channel.channel_id,
+    tx2 = update_channel(
+        alice,
+        bob,
         {
             alice.public_key: 9,
             bob.public_key: 6,
         },
-        tx2_hashes,
     )
 
-    # i due attori firmano la transazione tx2
-    tx2.add_signature(alice.public_key, alice.sign(tx2.payload()))
-    tx2.add_signature(bob.public_key, bob.sign(tx2.payload()))
-
-    # i due attori si rivelano i segreti della transazione precedente (tx1)
-    ln.reveal_revocation_secret(
+    alice_tx1_secret = alice.reveal_previous_secret(
         channel.channel_id,
         tx1.transaction_id,
-        alice.public_key,
-        alice.get_revocation_secret(tx1.transaction_id),
     )
-    ln.reveal_revocation_secret(
-        channel.channel_id,
-        tx1.transaction_id,
-        bob.public_key,
-        bob.get_revocation_secret(tx1.transaction_id),
-    )
+    bob.receive_revocation_secret(tx1, alice.public_key, alice_tx1_secret)
+    bob_tx1_secret = bob.reveal_previous_secret(channel.channel_id, tx1.transaction_id)
+    alice.receive_revocation_secret(tx1, bob.public_key, bob_tx1_secret)
 
     # Bob prova a chiudere on-chain con tx1, che e' vecchia rispetto a tx2.
     ln.publish_commitment(
-        channel.channel_id,
-        tx1.transaction_id,
+        tx1,
         broadcaster=bob.public_key,
         challenge_period=2,
     )
-    bob_tx1_secret = ln.get_revealed_revocation_secret(
+    bob_tx1_secret = alice.get_counterparty_revocation_secret(
         channel.channel_id,
         tx1.transaction_id,
-        bob.public_key,
     )
     final_balances = bc.punish_commitment(
         funding_wallet.address,
