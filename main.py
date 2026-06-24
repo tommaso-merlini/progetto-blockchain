@@ -1,172 +1,104 @@
-import json
-import re
 import sys
-from dataclasses import dataclass
-from threading import Thread
-from urllib.request import Request, urlopen
-
+import re
+import asyncio
 import uvicorn
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from commitment_transaction import CommitmentTransaction, create_commitment
-from funding_transaction import (
-    Contribution,
-    FundingTransaction,
-    create_funding_transaction,
-)
+from node import LightningNode
+from http_interface import HttpInterface
 
-
-@dataclass
-class Channel:
-    funding: FundingTransaction
-    commitment: CommitmentTransaction
-
-
-channels: dict[str, Channel] = {}
-private_key = Ed25519PrivateKey.generate()
-public_key = private_key.public_key().public_bytes_raw().hex()
-
-
-def parse_funding(data: dict) -> FundingTransaction:
-    contributions = [Contribution(**item) for item in data["contributions"]]
-    if len(contributions) != 2:
-        raise ValueError
-    transaction = create_funding_transaction(*contributions)
-    if data != json.loads(transaction.serialize()):
-        raise ValueError
-    return transaction
-
+# Componenti core a livello di modulo per consentire il caricamento tramite stringa ("main:app")
+node = LightningNode()
+interface = HttpInterface(node)
 
 async def app(scope, receive, send):
-    body = b""
-    while (message := await receive())["type"] == "http.request":
-        body += message.get("body", b"")
-        if not message.get("more_body"):
-            break
+    """Entrypoint ASGI a livello di modulo chiamato da Uvicorn."""
+    await interface(scope, receive, send)
 
-    if scope["method"] == "GET" and scope["path"] == "/public-key":
-        status, body = 200, public_key.encode()
-        content_type = b"text/plain; charset=utf-8"
-    elif scope["method"] == "POST" and scope["path"] == "/funding":
-        try:
-            data = json.loads(body)
-            print(data)
-            funding = parse_funding(data["funding"])
-            peers = [
-                item.public_key
-                for item in funding.contributions
-                if item.public_key != public_key
-            ]
-            if len(peers) != 1:
-                raise ValueError
 
-            own_commitment = create_commitment(funding, public_key)
-            if not own_commitment.verify(peers[0], data["signature"]):
-                raise ValueError
-            own_commitment.signatures = {
-                peers[0]: data["signature"],
-                public_key: own_commitment.sign(private_key),
-            }
-            # TODO: make retries idempotent.
-            channels[funding.id] = Channel(funding, own_commitment)
+class SafeServer(uvicorn.Server):
+    """Sottoclasse di Uvicorn che disabilita i gestori dei segnali per evitare eccezioni."""
+    def install_signal_handlers(self) -> None:
+        pass
 
-            peer_commitment = create_commitment(funding, peers[0])
-            response = {
-                "funding_id": funding.id,
-                "signature": peer_commitment.sign(private_key),
-            }
-            status, body = 200, json.dumps(response).encode()
-        except KeyError, TypeError, ValueError, json.JSONDecodeError:
-            status, body = 400, b"Invalid funding transaction\n"
-        content_type = b"application/json"
-    elif scope["method"] != "POST" or scope["path"] != "/command":
-        status, body, content_type = 404, b"Not Found\n", b"text/plain;charset=UTF-8"
-    else:
-        text = body.decode(errors="replace")
-        print(f"\n{text}")
-        print("> ", end="", flush=True)
-        status, content_type = 200, b"text/plain; charset=utf-8"
 
-    await send(
-        {
-            "type": "http.response.start",
-            "status": status,
-            "headers": [(b"content-type", content_type)],
-        }
+class ChannelCLI:
+    def __init__(self, node: LightningNode, interface: HttpInterface):
+        self.node = node
+        self.interface = interface
+
+    async def handle_command(self, cmd_text: str):
+        """Gestisce i comandi CLI in modo nativamente asincrono."""
+        tokens = cmd_text.split()
+        if not tokens: 
+            return
+        command = tokens[0]
+        
+        if command == "fund":
+            try:
+                funding_id = await self.interface.trigger_fund_logic(tokens[1], tokens[2], tokens[3])
+                print(f"\n[OK] Canale aperto con ID: {funding_id}")
+            except Exception as e: 
+                print(f"[ERRORE] Apertura canale fallita: {e}")
+                
+        elif command == "update":
+            try:
+                await self.interface.trigger_update_logic(tokens[1], tokens[2], tokens[3], tokens[4])
+                print(f"\n[OK] Canale aggiornato.")
+            except Exception as e: 
+                print(f"[ERRORE] Aggiornamento del canale fallito: {e}")
+                
+        elif command == "status":
+            if not self.node.channels:
+                print("\nNessun canale attivo.")
+            for channel_id, channel in self.node.channels.items():
+                current_commitment = channel.commitments[channel.current_index]
+                print(f"\nCanale ID: {channel_id}")
+                print(f"  Stato Indice Corrente: {channel.current_index}")
+                print(f"  Bilancio Locale: {current_commitment.own_amount}")
+                print(f"  Bilancio Remoto: {current_commitment.peer_amount}")
+
+
+async def main_async() -> None:
+    if len(sys.argv) < 2 or not re.fullmatch(r"[0-9]+", sys.argv[1]):
+        raise SystemExit("Uso: python main.py <port>")
+        
+    port = int(sys.argv[1])
+    cli = ChannelCLI(node, interface)
+    
+    # Parametri puliti e compatibili con qualsiasi versione di Uvicorn
+    config = uvicorn.Config(
+        "main:app",
+        host="0.0.0.0", 
+        port=port, 
+        log_level="critical", 
+        access_log=False, 
+        lifespan="off"
     )
-    await send({"type": "http.response.body", "body": body})
-
-
-def read_command(c: str):
+    # Istanziazione del server sicuro privo di gestione segnali interna
+    server = SafeServer(config)
+    
+    # Esecuzione del server ASGI nell'event loop corrente
+    server_task = asyncio.create_task(server.serve())
+    
     try:
-        command, own_amount, peer_amount, peer_url = c.split()
-        if command != "fund":
-            raise ValueError
-        with urlopen(peer_url.rstrip("/") + "/public-key", timeout=3) as response:
-            peer_key = response.read().decode()
-
-        funding = create_funding_transaction(
-            Contribution(public_key, int(own_amount)),
-            Contribution(peer_key, int(peer_amount)),
-        )
-        peer_commitment = create_commitment(funding, peer_key)
-        data = json.dumps(
-            {
-                "funding": json.loads(funding.serialize()),
-                "signature": peer_commitment.sign(private_key),
-            }
-        ).encode()
-        request = Request(peer_url.rstrip("/") + "/funding", data=data, method="POST")
-        with urlopen(request, timeout=3) as response:
-            answer = json.loads(response.read())
-            if answer["funding_id"] != funding.id:
-                raise ValueError("peer returned a different transaction ID")
-        own_commitment = create_commitment(funding, public_key)
-        if not own_commitment.verify(peer_key, answer["signature"]):
-            raise ValueError("invalid peer signature")
-        own_commitment.signatures = {
-            public_key: own_commitment.sign(private_key),
-            peer_key: answer["signature"],
-        }
-        channels[funding.id] = Channel(funding, own_commitment)
-        print(own_commitment)
-    except (KeyError, ValueError, OSError, json.JSONDecodeError) as error:
-        print(error or "Usage: fund <own_amount> <peer_amount> <peer_url>")
+        while not server.should_exit:
+            try:
+                cmd = await asyncio.to_thread(input, "> ")
+                await cli.handle_command(cmd)
+            except EOFError: 
+                # Mantiene attivo il server in ambienti di automazione non interattivi
+                while not server.should_exit:
+                    await asyncio.sleep(0.1)
+                break
+    except KeyboardInterrupt: 
+        pass
+    finally:
+        server.should_exit = True
+        await server_task
 
 
 def main() -> None:
-    argument = sys.argv[1] if len(sys.argv) > 1 else ""
-    if (
-        not re.fullmatch(r"[0-9]+", argument)
-        or not 1 <= (port := int(argument)) <= 65_535
-    ):
-        raise SystemExit("Usage: python main.py <port>")
-
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host="0.0.0.0",
-            port=port,
-            log_level="critical",
-            access_log=False,
-            lifespan="off",
-        )
-    )
-    thread = Thread(target=server.run)
-    thread.start()
-    print(f"Listening on http://0.0.0.0:{port}")
-    print(f"Public key: {public_key}")
-
-    try:
-        while True:
-            try:
-                read_command(input("> "))
-            except EOFError:
-                thread.join()
-    except KeyboardInterrupt:
-        print()
-        server.should_exit = True
-        thread.join()
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":

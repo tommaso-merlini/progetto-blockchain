@@ -1,34 +1,31 @@
 import json
-from dataclasses import asdict, dataclass, field
-
+from dataclasses import dataclass, field
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-    Ed25519PrivateKey,
-    Ed25519PublicKey,
-)
-
-from funding_transaction import Contribution, FundingTransaction
-
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 @dataclass
 class CommitmentTransaction:
     funding_id: str
-    owner: str
-    balances: tuple[Contribution, Contribution]
+    tx_index: int              
+    owner: str                 
+    own_amount: int            
+    peer_amount: int           
+    revocation_hash: str       
     signatures: dict[str, str] = field(default_factory=dict)
 
     def payload(self) -> bytes:
         data = {
             "funding_id": self.funding_id,
+            "tx_index": self.tx_index,
             "owner": self.owner,
-            "balances": self.balances,
+            "own_amount": self.own_amount,
+            "peer_amount": self.peer_amount,
+            "revocation_hash": self.revocation_hash,
         }
-        return json.dumps(
-            data, default=asdict, sort_keys=True, separators=(",", ":")
-        ).encode()
+        return json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
 
-    def sign(self, key: Ed25519PrivateKey) -> str:
-        return key.sign(self.payload()).hex()
+    def sign(self, private_key: Ed25519PrivateKey) -> str:
+        return private_key.sign(self.payload()).hex()
 
     def verify(self, public_key: str, signature: str) -> bool:
         try:
@@ -38,9 +35,3 @@ class CommitmentTransaction:
             return True
         except (InvalidSignature, ValueError):
             return False
-
-
-def create_commitment(funding: FundingTransaction, owner: str) -> CommitmentTransaction:
-    if owner not in (item.public_key for item in funding.contributions):
-        raise ValueError("commitment owner is not a channel participant")
-    return CommitmentTransaction(funding.id, owner, funding.contributions)
