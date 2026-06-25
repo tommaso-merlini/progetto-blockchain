@@ -10,6 +10,7 @@ SRC_DIR = Path(__file__).resolve().parent / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from http_interface import HttpInterface, NetworkClient
+from http_api.routes import trigger_fund
 from node import LightningNode
 
 def json_post(url: str, payload: dict) -> dict:
@@ -39,23 +40,27 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
                 return bob.public_key
             raise AssertionError(f"URL peer inatteso: {peer_url}")
 
-        async def call_handler(handler, payload: dict) -> dict:
-            status, body, _ = await handler(json.dumps(payload).encode())
+        async def call_route(interface, method: str, path: str, payload: dict) -> dict:
+            status, body, _ = await interface.dispatch(
+                method, path, json.dumps(payload).encode()
+            )
             if status >= 400:
                 raise AssertionError(body.decode())
             return json.loads(body.decode())
 
         async def fake_post(url: str, payload: dict) -> dict:
             if url == "bob/funding":
-                return await call_handler(bob_interface.handle_post_funding, payload)
+                return await call_route(bob_interface, "POST", "/funding", payload)
             if url == "bob/complete-funding":
-                return await call_handler(bob_interface.handle_post_complete_funding, payload)
+                return await call_route(
+                    bob_interface, "POST", "/complete-funding", payload
+                )
             raise AssertionError(f"Endpoint inatteso: {url}")
 
         NetworkClient.fetch_public_key = staticmethod(fake_fetch_public_key)
         NetworkClient.post = staticmethod(fake_post)
         try:
-            funding_id = await alice_interface.trigger_fund_logic(50, 70, "bob")
+            funding_id = await trigger_fund.run(alice, 50, 70, "bob")
         finally:
             NetworkClient.fetch_public_key = original_fetch_public_key
             NetworkClient.post = original_post

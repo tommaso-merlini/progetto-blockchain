@@ -1,4 +1,7 @@
-async def fund(_node, interface, tokens: list[str]) -> None:
+from http_api.routes import trigger_fund
+
+
+async def fund(_node, _interface, tokens: list[str]) -> None:
     if len(tokens) != 4:
         print("Uso: fund <own_amount> <peer_amount> <peer_url>")
         return
@@ -9,9 +12,7 @@ async def fund(_node, interface, tokens: list[str]) -> None:
         print("[ERRORE] Gli importi di fund devono essere numeri interi.")
         return
     try:
-        funding_id = await interface.trigger_fund_logic(
-            own_amount, peer_amount, tokens[3]
-        )
+        funding_id = await trigger_fund.run(_node, own_amount, peer_amount, tokens[3])
         print(f"\n[OK] Canale aperto con ID: {funding_id}")
     except Exception as e:
         print(f"[ERRORE] Apertura canale fallita: {e}")

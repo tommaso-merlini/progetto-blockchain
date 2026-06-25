@@ -1,4 +1,7 @@
-async def propose_update(node, interface, tokens: list[str]) -> None:
+from http_api.routes import trigger_propose_update
+
+
+async def propose_update(node, _interface, tokens: list[str]) -> None:
     if len(tokens) != 5:
         print(
             "Uso: propose-update <funding_id> <new_own_amount> "
@@ -27,8 +30,12 @@ async def propose_update(node, interface, tokens: list[str]) -> None:
         )
         return
     try:
-        await interface.trigger_propose_update_logic(
-            funding_id, new_own, new_peer, tokens[4]
+        await trigger_propose_update.run(
+            node,
+            funding_id,
+            new_own,
+            new_peer,
+            tokens[4],
         )
         print("\n[OK] Proposta di aggiornamento inviata.")
         print("Il peer deve eseguire: accept-update <funding_id> <proposer_url>")
