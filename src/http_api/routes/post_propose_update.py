@@ -1,6 +1,6 @@
 import json
 
-from lightningnetwork import LightningNode
+from lightningnetwork import LightningNode, validate_channel_balances
 
 
 async def handle(node: LightningNode, body: bytes):
@@ -12,15 +12,16 @@ async def handle(node: LightningNode, body: bytes):
         if channel.pending_update is not None:
             raise ValueError("Esiste gia' una proposta pendente per questo canale")
 
-        if data["own_amount"] + data["peer_amount"] != channel.funding.output.amount:
-            raise ValueError("I bilanci proposti violano la capacità del canale")
+        own_amount, peer_amount = validate_channel_balances(
+            data["own_amount"], data["peer_amount"], channel.funding.output.amount
+        )
 
         channel.peer_hashes[next_index] = data["next_hash"]
         channel.pending_update = {
             "role": "responder",
             "next_index": next_index,
-            "own_amount": data["own_amount"],
-            "peer_amount": data["peer_amount"],
+            "own_amount": own_amount,
+            "peer_amount": peer_amount,
         }
 
         next_secret = node.generate_secret()

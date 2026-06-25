@@ -1,4 +1,5 @@
 from http_api.routes import trigger_propose_update
+from lightningnetwork import validate_channel_balances
 
 
 async def propose_update(node, tokens: list[str]) -> None:
@@ -19,11 +20,10 @@ async def propose_update(node, tokens: list[str]) -> None:
         print("[ERRORE] I nuovi bilanci devono essere numeri interi.")
         return
     capacity = node.channels[funding_id].funding.output.amount
-    if new_own + new_peer != capacity:
-        print(
-            f"[ERRORE] Bilanci non validi: {new_own} + {new_peer} = "
-            f"{new_own + new_peer}, ma la capacità del canale è {capacity}."
-        )
+    try:
+        validate_channel_balances(new_own, new_peer, capacity)
+    except ValueError as e:
+        print(f"[ERRORE] Bilanci non validi: {e}")
         print(
             "Suggerimento: propose-update vuole il nuovo stato completo, "
             "non l'importo da pagare."

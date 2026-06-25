@@ -6,6 +6,7 @@ from .funding_transaction import (
     create_funding_transaction,
 )
 from .node import Channel, LightningNode, PendingFunding
+from .validation import validate_channel_balances
 
 __all__ = [
     "Channel",
@@ -16,4 +17,5 @@ __all__ = [
     "MultisigOutput",
     "PendingFunding",
     "create_funding_transaction",
+    "validate_channel_balances",
 ]

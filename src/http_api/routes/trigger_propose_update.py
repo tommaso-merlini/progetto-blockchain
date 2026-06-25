@@ -1,4 +1,4 @@
-from lightningnetwork import LightningNode
+from lightningnetwork import LightningNode, validate_channel_balances
 
 from ..client import NetworkClient
 
@@ -13,19 +13,17 @@ async def run(
     if channel.pending_update is not None:
         raise ValueError("Esiste gia' una proposta pendente per questo canale")
 
-    if int(new_own) + int(new_peer) != channel.funding.output.amount:
-        raise ValueError(
-            f"I bilanci proposti violano la capacità del canale: "
-            f"{new_own} + {new_peer} != {channel.funding.output.amount}"
-        )
+    new_own, new_peer = validate_channel_balances(
+        new_own, new_peer, channel.funding.output.amount
+    )
 
     next_secret = node.generate_secret()
     own_hash = node.hash_sha256(next_secret)
 
     proposal_payload = {
         "funding_id": funding_id,
-        "own_amount": int(new_own),
-        "peer_amount": int(new_peer),
+        "own_amount": new_own,
+        "peer_amount": new_peer,
         "next_hash": own_hash,
     }
     proposal_response = await NetworkClient.post(
@@ -37,7 +35,7 @@ async def run(
     channel.pending_update = {
         "role": "proposer",
         "next_index": next_index,
-        "own_amount": int(new_own),
-        "peer_amount": int(new_peer),
+        "own_amount": new_own,
+        "peer_amount": new_peer,
         "peer_url": peer_url,
     }
