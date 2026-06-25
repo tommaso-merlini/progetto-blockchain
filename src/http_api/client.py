@@ -21,6 +21,27 @@ class NetworkClient:
     """Gestisce le richieste HTTP uscenti in modo non bloccante per l'event loop."""
 
     @staticmethod
+    async def get(url: str) -> dict:
+        def _sync_get():
+            try:
+                with urlopen(url, timeout=5) as response:
+                    return json.loads(response.read().decode())
+            except HTTPError as e:
+                detail = parse_http_error_body(e.read(), e.reason)
+                raise RuntimeError(
+                    f"{url} ha risposto HTTP {e.code}: {detail}"
+                ) from e
+            except URLError as e:
+                raise RuntimeError(f"Connessione fallita verso {url}: {e.reason}") from e
+            except ValueError as e:
+                raise RuntimeError(
+                    f"URL non valido: {url}. Usa un URL completo, per esempio "
+                    "http://127.0.0.1:1234"
+                ) from e
+
+        return await asyncio.to_thread(_sync_get)
+
+    @staticmethod
     async def post(url: str, payload: dict) -> dict:
         def _sync_post():
             req = Request(

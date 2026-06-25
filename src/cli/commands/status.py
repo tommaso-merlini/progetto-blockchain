@@ -1,5 +1,5 @@
 async def status(node, _tokens: list[str]) -> None:
-    if not node.channels:
+    if not node.channels and not node.pending_fundings:
         print("\nNessun canale attivo.")
     for channel_id, channel in node.channels.items():
         current_commitment = channel.commitments[channel.current_index]
@@ -23,3 +23,16 @@ async def status(node, _tokens: list[str]) -> None:
             print(f"    Nuovo Bilancio Remoto: {pending_peer}")
             if pending.get("role") != "proposer":
                 print(f"    Accetta con: accept-update {channel_id} <proposer_url>")
+
+    for funding_id, pending in node.pending_fundings.items():
+        own_amount = pending.funding.get_own_contribution(node.public_key).amount
+        peer_amount = pending.funding.get_peer_contribution(node.public_key).amount
+        role = "inviata" if pending.role == "proposer" else "ricevuta"
+        print(f"\nFunding Pendente ID: {funding_id}")
+        print(f"  Proposta: {role}")
+        print(f"  Contributo Locale: {own_amount}")
+        print(f"  Contributo Remoto: {peer_amount}")
+        if pending.peer_url:
+            print(f"  Peer URL: {pending.peer_url}")
+        if pending.role != "proposer":
+            print(f"  Accetta con: accept-funding {funding_id} <proposer_url>")

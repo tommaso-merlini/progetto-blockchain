@@ -13,6 +13,8 @@ class ChannelCLI:
         command = tokens[0]
         if command == "fund":
             await commands.fund(self.node, tokens)
+        elif command == "accept-funding":
+            await commands.accept_funding(self.node, tokens)
         elif command == "propose-update":
             await commands.propose_update(self.node, tokens)
         elif command == "accept-update":
@@ -22,5 +24,6 @@ class ChannelCLI:
         else:
             print(f"[ERRORE] Comando sconosciuto: {command}")
             print(
-                "Comandi disponibili: fund, propose-update, accept-update, status"
+                "Comandi disponibili: fund, accept-funding, propose-update, "
+                "accept-update, status"
             )

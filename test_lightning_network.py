@@ -12,7 +12,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 from http_api import HttpInterface, NetworkClient
 from http_api.blockchain_client import MockBlockchainClient
-from http_api.routes import trigger_fund
+from http_api.routes import trigger_accept_funding, trigger_fund
 from lightningnetwork import (
     Channel,
     CommitmentTransaction,
@@ -58,6 +58,30 @@ def json_post(url: str, payload: dict) -> dict:
     )
     with urlopen(request, timeout=10) as response:
         return json.loads(response.read().decode())
+
+
+def manual_fund(
+    proposer_url: str,
+    responder_url: str,
+    own_amount: int,
+    peer_amount: int,
+) -> str:
+    """Apre un canale in due passaggi: proposta e accettazione manuale."""
+    response = json_post(
+        f"{proposer_url}/client/fund",
+        {
+            "own_amount": own_amount,
+            "peer_amount": peer_amount,
+            "peer_url": responder_url,
+            "own_url": proposer_url,
+        },
+    )
+    funding_id = response["funding_id"]
+    json_post(
+        f"{responder_url}/client/accept-funding",
+        {"funding_id": funding_id, "proposer_url": proposer_url},
+    )
+    return funding_id
 
 
 def manual_update(
@@ -145,6 +169,8 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         async def fake_fetch_public_key(peer_url: str) -> str:
             if peer_url == "bob":
                 return bob.public_key
+            if peer_url == "alice":
+                return alice.public_key
             raise AssertionError(f"URL peer inatteso: {peer_url}")
 
         async def call_route(interface, method: str, path: str, payload: dict) -> dict:
@@ -158,9 +184,9 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         async def fake_post(url: str, payload: dict) -> dict:
             if url == "bob/funding":
                 return await call_route(bob_interface, "POST", "/funding", payload)
-            if url == "bob/complete-funding":
+            if url == "alice/complete-funding":
                 return await call_route(
-                    bob_interface, "POST", "/complete-funding", payload
+                    alice_interface, "POST", "/complete-funding", payload
                 )
             if url == "http://localhost:9000/multisig":
                 return {"funding_id": "mocked"}
@@ -169,7 +195,13 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         NetworkClient.fetch_public_key = staticmethod(fake_fetch_public_key)
         NetworkClient.post = staticmethod(fake_post)
         try:
-            funding_id = await trigger_fund.run(alice, 50, 70, "bob")
+            funding_id = await trigger_fund.run(alice, 50, 70, "bob", "alice")
+            self.assertNotIn(funding_id, alice.channels)
+            self.assertNotIn(funding_id, bob.channels)
+            self.assertEqual(alice.pending_fundings[funding_id].role, "proposer")
+            self.assertEqual(bob.pending_fundings[funding_id].role, "responder")
+
+            await trigger_accept_funding.run(bob, funding_id, "alice")
         finally:
             NetworkClient.fetch_public_key = original_fetch_public_key
             NetworkClient.post = original_post
@@ -186,7 +218,55 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bob_channel.commitments[0].owner, bob.public_key)
         self.assertEqual(bob_channel.commitments[0].revocation_hash, bob_hash)
         self.assertEqual(bob_channel.peer_hashes[0], alice_hash)
+        self.assertNotIn(funding_id, alice.pending_fundings)
         self.assertNotIn(funding_id, bob.pending_fundings)
+
+    async def test_responder_rejects_automatic_complete_funding(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        bob_interface = HttpInterface(bob)
+        funding = create_funding_transaction(
+            Contribution(alice.public_key, 50),
+            Contribution(bob.public_key, 70),
+        )
+        alice_secret = alice.generate_secret()
+
+        status, body, _ = await bob_interface.dispatch(
+            "POST",
+            "/funding",
+            json.dumps(
+                {
+                    "funding": json.loads(funding.serialize().decode()),
+                    "initial_hash": alice.hash_sha256(alice_secret),
+                }
+            ).encode(),
+        )
+        self.assertEqual(status, 200, body.decode())
+        response = json.loads(body.decode())
+
+        bob_commitment = CommitmentTransaction(
+            funding_id=funding.id,
+            tx_index=0,
+            owner=bob.public_key,
+            own_amount=70,
+            peer_amount=50,
+            revocation_hash=response["initial_hash"],
+        )
+        status, body, _ = await bob_interface.dispatch(
+            "POST",
+            "/complete-funding",
+            json.dumps(
+                {
+                    "funding_id": funding.id,
+                    "signature": bob_commitment.sign(alice.private_key),
+                }
+            ).encode(),
+        )
+
+        self.assertEqual(status, 400)
+        self.assertIn("accettata manualmente", body.decode())
+        self.assertNotIn(funding.id, bob.channels)
+        self.assertIn(funding.id, bob.pending_fundings)
 
     async def test_close_channel_publishes_commitment_with_both_signatures(self):
         alice = LightningNode()
@@ -222,6 +302,60 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         pending = blockchain.pending_closes[funding_id]
         self.assertIn(alice.public_key, pending.commitment.signatures)
         self.assertIn(bob.public_key, pending.commitment.signatures)
+
+    async def test_node_exposes_mock_blockchain_proxy_routes(self):
+        node = LightningNode()
+        interface = HttpInterface(node)
+
+        original_get_status = MockBlockchainClient.__dict__["get_status"]
+        original_get_multisig_status = MockBlockchainClient.__dict__[
+            "get_multisig_status"
+        ]
+        original_finalize_close = MockBlockchainClient.__dict__["finalize_close"]
+
+        async def fake_get_status() -> dict:
+            return {"block_number": 7, "multisigs": {}, "balances": {}}
+
+        async def fake_get_multisig_status(funding_id: str) -> dict:
+            return {
+                "funding_id": funding_id,
+                "funding": {"output": {"amount": 100}},
+                "spent": False,
+                "pending_close": None,
+            }
+
+        async def fake_finalize_close(funding_id: str) -> dict:
+            return {"funding_id": funding_id, "owner_amount": 40, "peer_amount": 60}
+
+        MockBlockchainClient.get_status = staticmethod(fake_get_status)
+        MockBlockchainClient.get_multisig_status = staticmethod(
+            fake_get_multisig_status
+        )
+        MockBlockchainClient.finalize_close = staticmethod(fake_finalize_close)
+        try:
+            status, body, _ = await interface.dispatch(
+                "GET", "/client/blockchain/status", b""
+            )
+            self.assertEqual(status, 200, body.decode())
+            self.assertEqual(json.loads(body.decode())["block_number"], 7)
+
+            status, body, _ = await interface.dispatch(
+                "GET", "/client/blockchain/multisig/funding-1", b""
+            )
+            self.assertEqual(status, 200, body.decode())
+            self.assertEqual(json.loads(body.decode())["funding_id"], "funding-1")
+
+            status, body, _ = await interface.dispatch(
+                "POST",
+                "/client/finalize-close",
+                json.dumps({"funding_id": "funding-1"}).encode(),
+            )
+            self.assertEqual(status, 200, body.decode())
+            self.assertEqual(json.loads(body.decode())["owner_amount"], 40)
+        finally:
+            MockBlockchainClient.get_status = original_get_status
+            MockBlockchainClient.get_multisig_status = original_get_multisig_status
+            MockBlockchainClient.finalize_close = original_finalize_close
 
     def test_mock_blockchain_rejects_tampered_commitment_amounts(self):
         alice = LightningNode()
@@ -365,8 +499,7 @@ class TestSection1_Direct(LightningTestBase):
 
     def test_d1_success_with_correct_secret(self):
         self.add_step("Alice apre un canale con Bob (50/50)")
-        response = json_post("http://localhost:8001/client/fund", {"own_amount": 50, "peer_amount": 50, "peer_url": "http://localhost:8002"})
-        funding_id = response["funding_id"]
+        funding_id = manual_fund("http://localhost:8001", "http://localhost:8002", 50, 50)
         
         self.add_step("Alice esegue un pagamento off-chain inviando il segreto crittografico corretto (Alice=40, Bob=60)")
         manual_update("http://localhost:8001", "http://localhost:8002", funding_id, 40, 60)
@@ -376,8 +509,7 @@ class TestSection1_Direct(LightningTestBase):
 
     def test_d2_time_hash_lock_isolation(self):
         self.add_step("Alice stabilisce un canale iniziale da 100/100")
-        response = json_post("http://localhost:8001/client/fund", {"own_amount": 100, "peer_amount": 100, "peer_url": "http://localhost:8002"})
-        funding_id = response["funding_id"]
+        funding_id = manual_fund("http://localhost:8001", "http://localhost:8002", 100, 100)
         
         self.add_step("Alice isola e vincola 20 monete all'interno di un HTLC")
         manual_update("http://localhost:8001", "http://localhost:8002", funding_id, 80, 120)
@@ -386,8 +518,7 @@ class TestSection1_Direct(LightningTestBase):
         self.print_snapshot("D2", "TIME HASH LOCK ISOLATION", "Alice=80 (20 monete allocate in HTLC)", "100/100")
 
     def test_d3_node_delay_handling(self):
-        response = json_post("http://localhost:8001/client/fund", {"own_amount": 50, "peer_amount": 50, "peer_url": "http://localhost:8002"})
-        funding_id = response["funding_id"]
+        funding_id = manual_fund("http://localhost:8001", "http://localhost:8002", 50, 50)
         
         self.add_step("Bob sperimenta latenza di rete. Alice propone una transizione parziale a 45/55")
         manual_update("http://localhost:8001", "http://localhost:8002", funding_id, 45, 55)
@@ -405,8 +536,7 @@ class TestSection1_Direct(LightningTestBase):
         self.print_snapshot("D4", "NODO NON PAGA / OFFLINE", "Richiesta interrotta via Timeout Eccezione", "N/A")
 
     def test_d5_recipient_wrong_hash_secret(self):
-        response = json_post("http://localhost:8001/client/fund", {"own_amount": 50, "peer_amount": 50, "peer_url": "http://localhost:8002"})
-        funding_id = response["funding_id"]
+        funding_id = manual_fund("http://localhost:8001", "http://localhost:8002", 50, 50)
         
         self.add_step("Bob tenta di forzare la liquidazione inviando un preimage (segreto) non valido")
         with self.assertRaises(Exception):
@@ -416,8 +546,7 @@ class TestSection1_Direct(LightningTestBase):
         self.print_snapshot("D5", "RECIPIENT DA HASH SBAGLIATO", "Rifiuto atomico del server (400 Bad Request)", "50/50")
 
     def test_d6_long_timeout_pipeline(self):
-        response = json_post("http://localhost:8001/client/fund", {"own_amount": 200, "peer_amount": 200, "peer_url": "http://localhost:8002"})
-        funding_id = response["funding_id"]
+        funding_id = manual_fund("http://localhost:8001", "http://localhost:8002", 200, 200)
         
         self.add_step("Apertura di una pipeline di instradamento con scadenza remota estesa (100 blocchi)")
         manual_update("http://localhost:8001", "http://localhost:8002", funding_id, 150, 250)
@@ -426,8 +555,7 @@ class TestSection1_Direct(LightningTestBase):
         self.print_snapshot("D6", "TIMEOUT LUNGO SULLA FILIERA", "Canale stabile, bilancio aggiornato ad indice 1", "200/200")
 
     def test_d7_short_timeout_enforcement(self):
-        response = json_post("http://localhost:8001/client/fund", {"own_amount": 50, "peer_amount": 50, "peer_url": "http://localhost:8002"})
-        funding_id = response["funding_id"]
+        funding_id = manual_fund("http://localhost:8001", "http://localhost:8002", 50, 50)
         
         self.add_step("Tentativo illegittimo di riscuotere lo stato indicizzato a un blocco futuro fuori sequenza")
         with self.assertRaises(Exception):
@@ -446,9 +574,9 @@ class TestSection2_Chain(LightningTestBase):
 
     def test_c1_chain_success_with_decrementing_lock(self):
         self.add_step("Inizializzazione della catena multi-hop: Alice <-> Carol <-> Dave <-> Bob")
-        cid_ac = json_post("http://localhost:8001/client/fund", {"own_amount": 100, "peer_amount": 100, "peer_url": "http://localhost:8003"})["funding_id"]
-        cid_cd = json_post("http://localhost:8003/client/fund", {"own_amount": 100, "peer_amount": 100, "peer_url": "http://localhost:8004"})["funding_id"]
-        cid_db = json_post("http://localhost:8004/client/fund", {"own_amount": 100, "peer_amount": 100, "peer_url": "http://localhost:8002"})["funding_id"]
+        cid_ac = manual_fund("http://localhost:8001", "http://localhost:8003", 100, 100)
+        cid_cd = manual_fund("http://localhost:8003", "http://localhost:8004", 100, 100)
+        cid_db = manual_fund("http://localhost:8004", "http://localhost:8002", 100, 100)
         
         self.add_step("Risoluzione a ritroso della catena (Backward Settlement): Bob propaga il segreto fino ad Alice")
         manual_update("http://localhost:8004", "http://localhost:8002", cid_db, 90, 110)
@@ -459,8 +587,8 @@ class TestSection2_Chain(LightningTestBase):
         self.print_snapshot("C1", "CATENA MULTI-HOP (SUCCESS)", "Bob incrementa a 110, intermedi liquidati a 100", "Tutti i canali a 100/100")
 
     def test_c2_chain_hash_lock_isolation(self):
-        cid_ac = json_post("http://localhost:8001/client/fund", {"own_amount": 50, "peer_amount": 50, "peer_url": "http://localhost:8003"})["funding_id"]
-        cid_cd = json_post("http://localhost:8003/client/fund", {"own_amount": 50, "peer_amount": 50, "peer_url": "http://localhost:8004"})["funding_id"]
+        cid_ac = manual_fund("http://localhost:8001", "http://localhost:8003", 50, 50)
+        cid_cd = manual_fund("http://localhost:8003", "http://localhost:8004", 50, 50)
         
         self.add_step("Alice blocca i fondi sul primo segmento (Alice -> Carol)")
         manual_update("http://localhost:8001", "http://localhost:8003", cid_ac, 40, 60)
@@ -471,8 +599,8 @@ class TestSection2_Chain(LightningTestBase):
         self.print_snapshot("C2", "CATENA HASH LOCK ISOLATION", "Fondi in transito isolati localmente", "50/50")
 
     def test_c3_chain_intermediate_node_delay(self):
-        cid_ac = json_post("http://localhost:8001/client/fund", {"own_amount": 60, "peer_amount": 60, "peer_url": "http://localhost:8003"})["funding_id"]
-        cid_cd = json_post("http://localhost:8003/client/fund", {"own_amount": 60, "peer_amount": 60, "peer_url": "http://localhost:8004"})["funding_id"]
+        cid_ac = manual_fund("http://localhost:8001", "http://localhost:8003", 60, 60)
+        cid_cd = manual_fund("http://localhost:8003", "http://localhost:8004", 60, 60)
         
         self.add_step("Alice aggiorna il primo hop. Carol introduce un ritardo software prima di inoltrare")
         manual_update("http://localhost:8001", "http://localhost:8003", cid_ac, 50, 70)
@@ -494,7 +622,7 @@ class TestSection2_Chain(LightningTestBase):
         self.print_snapshot("C4", "CATENA INTERROTTA (NON COOPERATIVO)", "Transazione respinta on-the-fly", "N/A")
 
     def test_c5_chain_recipient_wrong_hash_secret(self):
-        cid_ac = json_post("http://localhost:8001/client/fund", {"own_amount": 50, "peer_amount": 50, "peer_url": "http://localhost:8003"})["funding_id"]
+        cid_ac = manual_fund("http://localhost:8001", "http://localhost:8003", 50, 50)
         
         self.add_step("Il destinatario finale della catena tenta un exploit inviando un segreto errato all'hop intermedio")
         with self.assertRaises(Exception):
@@ -504,8 +632,8 @@ class TestSection2_Chain(LightningTestBase):
         self.print_snapshot("C5", "CATENA CON PREIMAGE ERRATO (ATTACCO)", "Fondi protetti dall'applicazione del nodo", "50/50")
 
     def test_c6_chain_long_timeout_safety(self):
-        cid_ac = json_post("http://localhost:8001/client/fund", {"own_amount": 500, "peer_amount": 500, "peer_url": "http://localhost:8003"})["funding_id"]
-        cid_cd = json_post("http://localhost:8003/client/fund", {"own_amount": 500, "peer_amount": 500, "peer_url": "http://localhost:8004"})["funding_id"]
+        cid_ac = manual_fund("http://localhost:8001", "http://localhost:8003", 500, 500)
+        cid_cd = manual_fund("http://localhost:8003", "http://localhost:8004", 500, 500)
         
         self.add_step("Configurazione ed esecuzione di una catena multi-hop ad alta capacità")
         manual_update("http://localhost:8001", "http://localhost:8003", cid_ac, 300, 700)
@@ -515,7 +643,7 @@ class TestSection2_Chain(LightningTestBase):
         self.print_snapshot("C6", "SICUREZZA FLUSSO AD ALTA CAPACITÀ", "Dave riceve ed allinea l'allocazione a 700", "500/500")
 
     def test_c7_chain_short_timeout_rejection(self):
-        cid_ac = json_post("http://localhost:8001/client/fund", {"own_amount": 100, "peer_amount": 100, "peer_url": "http://localhost:8003"})["funding_id"]
+        cid_ac = manual_fund("http://localhost:8001", "http://localhost:8003", 100, 100)
         
         self.add_step("Tentativo di sbloccare anzitempo un segmento intermedio violando il timelock concordato")
         with self.assertRaises(Exception):

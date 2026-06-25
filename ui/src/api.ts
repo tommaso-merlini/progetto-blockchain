@@ -15,6 +15,59 @@ export type ChannelStatus = {
 
 export type StatusResponse = Record<string, ChannelStatus>;
 
+export type PendingFundingStatus = {
+  role: "proposer" | "responder" | string;
+  own_amount: number;
+  peer_amount: number;
+  capacity: number;
+  peer_url?: string;
+};
+
+export type PendingFundingsResponse = Record<string, PendingFundingStatus>;
+
+export type FundingContribution = {
+  public_key: string;
+  amount: number;
+};
+
+export type FundingTransaction = {
+  contributions: FundingContribution[];
+  output: {
+    amount: number;
+    public_keys: string[];
+    required_signatures: number;
+  };
+};
+
+export type CommitmentTransaction = {
+  funding_id: string;
+  tx_index: number;
+  owner: string;
+  own_amount: number;
+  peer_amount: number;
+  revocation_hash: string;
+  signatures: Record<string, string>;
+};
+
+export type PendingClose = {
+  commitment: CommitmentTransaction;
+  published_at_block: number;
+  deadline_block: number;
+};
+
+export type MultisigStatus = {
+  funding_id: string;
+  funding: FundingTransaction;
+  spent: boolean;
+  pending_close: PendingClose | null;
+};
+
+export type BlockchainStatus = {
+  block_number: number;
+  multisigs: Record<string, MultisigStatus>;
+  balances: Record<string, number>;
+};
+
 async function readError(response: Response): Promise<string> {
   const text = await response.text();
   if (!text) {

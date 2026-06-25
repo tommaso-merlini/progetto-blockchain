@@ -15,6 +15,16 @@ async def handle(node: LightningNode, body: bytes):
             data["peer_url"],
             data.get("own_url"),
         )
-        return 200, json.dumps({"funding_id": funding_id}).encode(), b"application/json"
+        return (
+            200,
+            json.dumps(
+                {
+                    "funding_id": funding_id,
+                    "status": "pending",
+                    "next_step": "peer must call /client/accept-funding",
+                }
+            ).encode(),
+            b"application/json",
+        )
     except Exception as e:
         return 400, json.dumps({"error": str(e)}).encode(), b"application/json"

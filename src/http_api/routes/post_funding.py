@@ -16,6 +16,8 @@ async def handle(node: LightningNode, body: bytes):
         funding = create_funding_transaction(*contributions)
         funding.get_own_contribution(node.public_key)
         funding.get_peer_contribution(node.public_key)
+        if funding.id in node.pending_fundings:
+            raise ValueError("Esiste gia' una funding pendente con questo id")
 
         peer_url = data.get("peer_url")
         if peer_url is not None:
@@ -27,6 +29,7 @@ async def handle(node: LightningNode, body: bytes):
             own_secret=initial_secret,
             peer_hash=data["initial_hash"],
             peer_url=peer_url,
+            role="responder",
         )
 
         response = {

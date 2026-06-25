@@ -10,6 +10,8 @@ async def handle(node: LightningNode, body: bytes):
         data = json.loads(body)
         funding_id = data["funding_id"]
         pending = node.pending_fundings[funding_id]
+        if pending.role != "proposer":
+            raise ValueError("La funding ricevuta deve essere accettata manualmente dal peer")
         funding = pending.funding
 
         peer_key = funding.get_peer_contribution(node.public_key).public_key

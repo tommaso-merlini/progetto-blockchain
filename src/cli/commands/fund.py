@@ -13,6 +13,7 @@ async def fund(node, tokens: list[str]) -> None:
         return
     try:
         funding_id = await trigger_fund.run(node, own_amount, peer_amount, tokens[3])
-        print(f"\n[OK] Canale aperto con ID: {funding_id}")
+        print(f"\n[OK] Proposta di funding inviata con ID: {funding_id}")
+        print("Il peer deve eseguire: accept-funding <funding_id> <proposer_url>")
     except Exception as e:
         print(f"[ERRORE] Apertura canale fallita: {e}")

@@ -24,6 +24,7 @@ class PendingFunding:
     own_secret: str
     peer_hash: str
     peer_url: Optional[str] = None
+    role: str = "responder"
 
 class LightningNode:
     def __init__(self):

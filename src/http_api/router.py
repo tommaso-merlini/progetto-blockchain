@@ -1,10 +1,15 @@
 from lightningnetwork import LightningNode
 
 from .routes import (
+    get_client_blockchain_multisig,
+    get_client_blockchain_status,
+    get_client_pending_fundings,
     get_public_key,
     get_status,
+    post_client_accept_funding,
     post_client_accept_update,
     post_client_close_channel,
+    post_client_finalize_close,
     post_client_fund,
     post_client_propose_update,
     post_complete_funding,
@@ -23,11 +28,19 @@ class HttpInterface:
         self.node = node
 
     async def dispatch(self, method: str, path: str, body: bytes):
+        if method == "GET" and path.startswith("/client/blockchain/multisig/"):
+            funding_id = path.removeprefix("/client/blockchain/multisig/")
+            return await get_client_blockchain_multisig.handle(self.node, funding_id)
+
         match method, path:
             case "GET", "/public-key":
                 return await get_public_key.handle(self.node, body)
             case "GET", "/status":
                 return await get_status.handle(self.node, body)
+            case "GET", "/client/blockchain/status":
+                return await get_client_blockchain_status.handle(self.node, body)
+            case "GET", "/client/pending-fundings":
+                return await get_client_pending_fundings.handle(self.node, body)
             case "POST", "/funding":
                 return await post_funding.handle(self.node, body)
             case "POST", "/complete-funding":
@@ -42,12 +55,16 @@ class HttpInterface:
                 return await post_revoke_state.handle(self.node, body)
             case "POST", "/client/fund":
                 return await post_client_fund.handle(self.node, body)
+            case "POST", "/client/accept-funding":
+                return await post_client_accept_funding.handle(self.node, body)
             case "POST", "/client/propose-update":
                 return await post_client_propose_update.handle(self.node, body)
             case "POST", "/client/accept-update":
                 return await post_client_accept_update.handle(self.node, body)
             case "POST", "/client/close-channel":
                 return await post_client_close_channel.handle(self.node, body)
+            case "POST", "/client/finalize-close":
+                return await post_client_finalize_close.handle(self.node, body)
             case _:
                 return 404, b"Not Found\n", b"text/plain"
 
