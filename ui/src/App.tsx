@@ -338,6 +338,13 @@ function App() {
       return Boolean(multisig.pending_close && !multisig.spent);
     }).length;
   }, [multisigs]);
+  const nodeBlockchainBalance = useMemo(() => {
+    if (!blockchainStatus || !publicKey) {
+      return null;
+    }
+
+    return blockchainStatus.balances[publicKey] ?? 0;
+  }, [blockchainStatus, publicKey]);
   const knownPeerUrls = useMemo(() => {
     const urls = new Set<string>();
     if (lastPeerUrl) {
@@ -779,13 +786,20 @@ function App() {
       )}
 
       <section
-        className="mt-5 grid grid-cols-5 gap-3 max-xl:grid-cols-3 max-lg:grid-cols-2 max-md:grid-cols-1"
+        className="mt-5 grid grid-cols-6 gap-3 max-xl:grid-cols-3 max-lg:grid-cols-2 max-md:grid-cols-1"
         aria-label="Node summary"
       >
         <MetricCard
           label="Public key"
           title={publicKey}
           value={publicKey ? shortId(publicKey) : "Unavailable"}
+        />
+        <MetricCard
+          label="Chain balance"
+          title={publicKey ? `Balance for ${publicKey}` : undefined}
+          value={
+            nodeBlockchainBalance === null ? "Unavailable" : nodeBlockchainBalance
+          }
         />
         <MetricCard label="Channels" value={channels.length} />
         <MetricCard label="Pending fundings" value={pendingFundingEntries.length} />
@@ -1241,6 +1255,21 @@ function App() {
                         Pending
                       </dt>
                       <dd className="mt-1 font-extrabold">{pendingCloseCount}</dd>
+                    </div>
+                  </dl>
+                  <dl className="m-0 rounded-md bg-slate-100 px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-xs font-extrabold uppercase text-slate-500">
+                        Node balance
+                      </dt>
+                      <dd
+                        className="m-0 overflow-hidden text-lg font-extrabold text-ellipsis whitespace-nowrap"
+                        title={publicKey}
+                      >
+                        {nodeBlockchainBalance === null
+                          ? "Unavailable"
+                          : nodeBlockchainBalance}
+                      </dd>
                     </div>
                   </dl>
 
