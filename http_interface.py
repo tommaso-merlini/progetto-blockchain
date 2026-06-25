@@ -5,7 +5,7 @@ from urllib.request import Request, urlopen
 
 from funding_transaction import Contribution, create_funding_transaction
 from commitment_transaction import CommitmentTransaction
-from node import Channel, LightningNode
+from node import Channel, LightningNode, PendingFunding
 
 def parse_http_error_body(body: bytes, fallback: str) -> str:
     text = body.decode(errors="replace").strip()
@@ -67,6 +67,7 @@ class HttpInterface:
             ("GET", "/public-key"): self.handle_get_public_key,
             ("GET", "/status"): self.handle_get_status,
             ("POST", "/funding"): self.handle_post_funding,
+            ("POST", "/complete-funding"): self.handle_post_complete_funding,
             ("POST", "/propose-update"): self.handle_post_propose_update,
             ("POST", "/sign-update"): self.handle_post_sign_update,
             ("POST", "/sign-pending-update"): self.handle_post_sign_pending_update,
@@ -136,36 +137,58 @@ class HttpInterface:
             funding_data = data["funding"]
             contributions = [Contribution(**c) for c in funding_data["contributions"]]
             funding = create_funding_transaction(*contributions)
-            
-            peer_key = funding.get_peer_contribution(self.node.public_key).public_key
-            bob_amount = funding.get_own_contribution(self.node.public_key).amount
-            alice_amount = funding.get_peer_contribution(self.node.public_key).amount
+            funding.get_own_contribution(self.node.public_key)
+            funding.get_peer_contribution(self.node.public_key)
 
-            peer_commitment = CommitmentTransaction(
-                funding_id=funding.id, tx_index=0, owner=self.node.public_key,
-                own_amount=bob_amount, peer_amount=alice_amount, revocation_hash=data["initial_hash"]
-            )
-            if not peer_commitment.verify(peer_key, data["signature"]):
-                raise ValueError("Firma iniziale del peer non valida")
-
-            channel = Channel(funding=funding, current_index=0)
             initial_secret = self.node.generate_secret()
-            channel.own_secrets[0] = initial_secret
-            channel.peer_hashes[0] = data["initial_hash"]
-            
-            peer_commitment.signatures = {peer_key: data["signature"]}
-            channel.commitments[0] = peer_commitment
-            self.node.channels[funding.id] = channel
-
-            alice_commitment = CommitmentTransaction(
-                funding_id=funding.id, tx_index=0, owner=peer_key,
-                own_amount=alice_amount, peer_amount=bob_amount, revocation_hash=data["initial_hash"]
+            self.node.pending_fundings[funding.id] = PendingFunding(
+                funding=funding,
+                own_secret=initial_secret,
+                peer_hash=data["initial_hash"],
             )
 
             response = {
                 "funding_id": funding.id,
                 "initial_hash": self.node.hash_sha256(initial_secret),
-                "signature": alice_commitment.sign(self.node.private_key)
+            }
+            return 200, json.dumps(response).encode(), b"application/json"
+        except Exception as e:
+            return 400, json.dumps({"error": str(e)}).encode(), b"application/json"
+
+    async def handle_post_complete_funding(self, body: bytes):
+        try:
+            data = json.loads(body)
+            funding_id = data["funding_id"]
+            pending = self.node.pending_fundings[funding_id]
+            funding = pending.funding
+
+            peer_key = funding.get_peer_contribution(self.node.public_key).public_key
+            own_amount = funding.get_own_contribution(self.node.public_key).amount
+            peer_amount = funding.get_peer_contribution(self.node.public_key).amount
+            own_hash = self.node.hash_sha256(pending.own_secret)
+
+            own_commitment = CommitmentTransaction(
+                funding_id=funding.id, tx_index=0, owner=self.node.public_key,
+                own_amount=own_amount, peer_amount=peer_amount, revocation_hash=own_hash
+            )
+            if not own_commitment.verify(peer_key, data["signature"]):
+                raise ValueError("Firma iniziale del peer non valida")
+
+            channel = Channel(funding=funding, current_index=0)
+            channel.own_secrets[0] = pending.own_secret
+            channel.peer_hashes[0] = pending.peer_hash
+            own_commitment.signatures = {peer_key: data["signature"]}
+            channel.commitments[0] = own_commitment
+            self.node.channels[funding.id] = channel
+            del self.node.pending_fundings[funding.id]
+
+            peer_commitment = CommitmentTransaction(
+                funding_id=funding.id, tx_index=0, owner=peer_key,
+                own_amount=peer_amount, peer_amount=own_amount, revocation_hash=pending.peer_hash
+            )
+            response = {
+                "funding_id": funding.id,
+                "signature": peer_commitment.sign(self.node.private_key),
             }
             return 200, json.dumps(response).encode(), b"application/json"
         except Exception as e:
@@ -337,30 +360,37 @@ class HttpInterface:
         own_secret = self.node.generate_secret()
         own_hash = self.node.hash_sha256(own_secret)
         
-        peer_commitment = CommitmentTransaction(
-            funding_id=funding.id, tx_index=0, owner=peer_key,
-            own_amount=int(peer_amount), peer_amount=int(own_amount), revocation_hash=own_hash
-        )
-        
         payload = {
-            "funding": json.loads(funding.serialize().decode()), 
-            "initial_hash": own_hash, 
-            "signature": peer_commitment.sign(self.node.private_key)
+            "funding": json.loads(funding.serialize().decode()),
+            "initial_hash": own_hash,
         }
         response = await NetworkClient.post(f"{peer_url}/funding", payload)
-        
+        peer_hash = response["initial_hash"]
+
+        peer_commitment = CommitmentTransaction(
+            funding_id=funding.id, tx_index=0, owner=peer_key,
+            own_amount=int(peer_amount), peer_amount=int(own_amount), revocation_hash=peer_hash
+        )
+        complete_response = await NetworkClient.post(
+            f"{peer_url}/complete-funding",
+            {
+                "funding_id": funding.id,
+                "signature": peer_commitment.sign(self.node.private_key),
+            },
+        )
+
         channel = Channel(funding=funding, current_index=0)
         channel.own_secrets[0] = own_secret
-        channel.peer_hashes[0] = response["initial_hash"]
-        
+        channel.peer_hashes[0] = peer_hash
+
         own_commitment = CommitmentTransaction(
             funding_id=funding.id, tx_index=0, owner=self.node.public_key,
             own_amount=int(own_amount), peer_amount=int(peer_amount), revocation_hash=own_hash
         )
-        if not own_commitment.verify(peer_key, response["signature"]):
+        if not own_commitment.verify(peer_key, complete_response["signature"]):
             raise ValueError("La firma ricevuta dal peer non è valida")
-            
-        own_commitment.signatures = {peer_key: response["signature"]}
+
+        own_commitment.signatures = {peer_key: complete_response["signature"]}
         channel.commitments[0] = own_commitment
         self.node.channels[funding.id] = channel
         return funding.id

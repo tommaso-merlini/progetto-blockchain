@@ -5,6 +5,9 @@ import time
 import json
 from urllib.request import urlopen, Request
 
+from http_interface import HttpInterface, NetworkClient
+from node import LightningNode
+
 def json_post(url: str, payload: dict) -> dict:
     """Invia una richiesta HTTP POST con payload JSON di utilità per i test."""
     request = Request(
@@ -15,6 +18,57 @@ def json_post(url: str, payload: dict) -> dict:
     )
     with urlopen(request, timeout=10) as response:
         return json.loads(response.read().decode())
+
+
+class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
+    async def test_initial_commitments_use_owner_revocation_hash(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        alice_interface = HttpInterface(alice)
+        bob_interface = HttpInterface(bob)
+
+        original_fetch_public_key = NetworkClient.__dict__["fetch_public_key"]
+        original_post = NetworkClient.__dict__["post"]
+
+        async def fake_fetch_public_key(peer_url: str) -> str:
+            if peer_url == "bob":
+                return bob.public_key
+            raise AssertionError(f"URL peer inatteso: {peer_url}")
+
+        async def call_handler(handler, payload: dict) -> dict:
+            status, body, _ = await handler(json.dumps(payload).encode())
+            if status >= 400:
+                raise AssertionError(body.decode())
+            return json.loads(body.decode())
+
+        async def fake_post(url: str, payload: dict) -> dict:
+            if url == "bob/funding":
+                return await call_handler(bob_interface.handle_post_funding, payload)
+            if url == "bob/complete-funding":
+                return await call_handler(bob_interface.handle_post_complete_funding, payload)
+            raise AssertionError(f"Endpoint inatteso: {url}")
+
+        NetworkClient.fetch_public_key = staticmethod(fake_fetch_public_key)
+        NetworkClient.post = staticmethod(fake_post)
+        try:
+            funding_id = await alice_interface.trigger_fund_logic(50, 70, "bob")
+        finally:
+            NetworkClient.fetch_public_key = original_fetch_public_key
+            NetworkClient.post = original_post
+
+        alice_channel = alice.channels[funding_id]
+        bob_channel = bob.channels[funding_id]
+        alice_hash = alice.hash_sha256(alice_channel.own_secrets[0])
+        bob_hash = bob.hash_sha256(bob_channel.own_secrets[0])
+
+        self.assertEqual(alice_channel.commitments[0].owner, alice.public_key)
+        self.assertEqual(alice_channel.commitments[0].revocation_hash, alice_hash)
+        self.assertEqual(alice_channel.peer_hashes[0], bob_hash)
+
+        self.assertEqual(bob_channel.commitments[0].owner, bob.public_key)
+        self.assertEqual(bob_channel.commitments[0].revocation_hash, bob_hash)
+        self.assertEqual(bob_channel.peer_hashes[0], alice_hash)
+        self.assertNotIn(funding_id, bob.pending_fundings)
 
 
 class LightningTestBase(unittest.TestCase):

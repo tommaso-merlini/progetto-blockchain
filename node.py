@@ -17,11 +17,18 @@ class Channel:
     revoked_peer_secrets: dict[int, str] = field(default_factory=dict)
     pending_update: Optional[dict] = None
 
+@dataclass
+class PendingFunding:
+    funding: FundingTransaction
+    own_secret: str
+    peer_hash: str
+
 class LightningNode:
     def __init__(self):
         self.private_key = Ed25519PrivateKey.generate()
         self.public_key = self.private_key.public_key().public_bytes_raw().hex()
         self.channels: dict[str, Channel] = {}
+        self.pending_fundings: dict[str, PendingFunding] = {}
 
     @staticmethod
     def hash_sha256(secret: str) -> str:
