@@ -69,6 +69,8 @@ class HttpInterface:
             ("POST", "/funding"): self.handle_post_funding,
             ("POST", "/propose-update"): self.handle_post_propose_update,
             ("POST", "/sign-update"): self.handle_post_sign_update,
+            ("POST", "/sign-pending-update"): self.handle_post_sign_pending_update,
+            ("POST", "/complete-update"): self.handle_post_complete_update,
             ("POST", "/revoke-state"): self.handle_post_revoke_state,
             ("POST", "/client/fund"): self.handle_client_fund,
             ("POST", "/client/update"): self.handle_client_update,
@@ -111,6 +113,21 @@ class HttpInterface:
                 "own_amount": current_commitment.own_amount,
                 "peer_amount": current_commitment.peer_amount
             }
+            if channel.pending_update:
+                pending = channel.pending_update
+                role = pending.get("role", "responder")
+                if role == "proposer":
+                    pending_own = pending["own_amount"]
+                    pending_peer = pending["peer_amount"]
+                else:
+                    pending_own = pending["peer_amount"]
+                    pending_peer = pending["own_amount"]
+                status_data[channel_id]["pending_update"] = {
+                    "role": role,
+                    "next_index": pending.get("next_index"),
+                    "own_amount": pending_own,
+                    "peer_amount": pending_peer
+                }
         return 200, json.dumps(status_data).encode(), b"application/json"
 
     async def handle_post_funding(self, body: bytes):
@@ -159,12 +176,20 @@ class HttpInterface:
             data = json.loads(body)
             channel = self.node.channels[data["funding_id"]]
             next_index = channel.current_index + 1
+
+            if channel.pending_update is not None:
+                raise ValueError("Esiste gia' una proposta pendente per questo canale")
             
             if data["own_amount"] + data["peer_amount"] != channel.funding.output.amount:
                 raise ValueError("I bilanci proposti violano la capacità del canale")
 
             channel.peer_hashes[next_index] = data["next_hash"]
-            channel.pending_update = {"own_amount": data["own_amount"], "peer_amount": data["peer_amount"]}
+            channel.pending_update = {
+                "role": "responder",
+                "next_index": next_index,
+                "own_amount": data["own_amount"],
+                "peer_amount": data["peer_amount"]
+            }
 
             next_secret = self.node.generate_secret()
             channel.own_secrets[next_index] = next_secret
@@ -196,6 +221,72 @@ class HttpInterface:
                 revocation_hash=channel.peer_hashes[next_index]
             )
             return 200, json.dumps({"signature": peer_commitment.sign(self.node.private_key)}).encode(), b"application/json"
+        except Exception as e:
+            return 400, json.dumps({"error": str(e)}).encode(), b"application/json"
+
+    async def handle_post_sign_pending_update(self, body: bytes):
+        try:
+            data = json.loads(body)
+            channel = self.node.channels[data["funding_id"]]
+            pending = channel.pending_update
+            if not pending or pending.get("role") != "proposer":
+                raise ValueError("Nessuna proposta locale pendente da firmare")
+
+            next_index = channel.current_index + 1
+            if pending.get("next_index") != next_index:
+                raise ValueError("Indice della proposta pendente non coerente")
+
+            peer_key = channel.funding.get_peer_contribution(self.node.public_key).public_key
+            next_hash = data["next_hash"]
+            known_peer_hash = channel.peer_hashes.get(next_index)
+            if known_peer_hash is not None and known_peer_hash != next_hash:
+                raise ValueError("L'hash del peer non coincide con la proposta pendente")
+            channel.peer_hashes[next_index] = next_hash
+
+            peer_commitment = CommitmentTransaction(
+                funding_id=channel.funding.id, tx_index=next_index, owner=peer_key,
+                own_amount=pending["peer_amount"], peer_amount=pending["own_amount"],
+                revocation_hash=next_hash
+            )
+            return 200, json.dumps({"signature": peer_commitment.sign(self.node.private_key)}).encode(), b"application/json"
+        except Exception as e:
+            return 400, json.dumps({"error": str(e)}).encode(), b"application/json"
+
+    async def handle_post_complete_update(self, body: bytes):
+        try:
+            data = json.loads(body)
+            channel = self.node.channels[data["funding_id"]]
+            pending = channel.pending_update
+            if not pending or pending.get("role") != "proposer":
+                raise ValueError("Nessuna proposta locale pendente da completare")
+
+            old_index = channel.current_index
+            if data["tx_index"] != old_index:
+                raise ValueError("Indice di revoca non coerente con lo stato corrente")
+
+            next_index = old_index + 1
+            peer_key = channel.funding.get_peer_contribution(self.node.public_key).public_key
+            own_hash = self.node.hash_sha256(channel.own_secrets[next_index])
+
+            own_commitment = CommitmentTransaction(
+                funding_id=channel.funding.id, tx_index=next_index, owner=self.node.public_key,
+                own_amount=pending["own_amount"], peer_amount=pending["peer_amount"],
+                revocation_hash=own_hash
+            )
+            if not own_commitment.verify(peer_key, data["signature"]):
+                raise ValueError("La firma del peer sul nuovo stato non è valida")
+
+            if self.node.hash_sha256(data["secret"]) != channel.peer_hashes[old_index]:
+                raise ValueError("Il segreto di revoca del peer non è corretto")
+
+            own_commitment.signatures = {peer_key: data["signature"]}
+            channel.commitments[next_index] = own_commitment
+            channel.revoked_peer_secrets[old_index] = data["secret"]
+            old_own_secret = channel.own_secrets[old_index]
+            channel.current_index = next_index
+            channel.pending_update = None
+
+            return 200, json.dumps({"secret": old_own_secret}).encode(), b"application/json"
         except Exception as e:
             return 400, json.dumps({"error": str(e)}).encode(), b"application/json"
 
@@ -273,6 +364,93 @@ class HttpInterface:
         channel.commitments[0] = own_commitment
         self.node.channels[funding.id] = channel
         return funding.id
+
+    async def trigger_propose_update_logic(self, funding_id: str, new_own: int, new_peer: int, peer_url: str):
+        peer_url = peer_url.rstrip("/")
+        channel = self.node.channels[funding_id]
+        next_index = channel.current_index + 1
+
+        if channel.pending_update is not None:
+            raise ValueError("Esiste gia' una proposta pendente per questo canale")
+
+        if int(new_own) + int(new_peer) != channel.funding.output.amount:
+            raise ValueError(
+                f"I bilanci proposti violano la capacità del canale: "
+                f"{new_own} + {new_peer} != {channel.funding.output.amount}"
+            )
+
+        next_secret = self.node.generate_secret()
+        own_hash = self.node.hash_sha256(next_secret)
+
+        proposal_payload = {
+            "funding_id": funding_id,
+            "own_amount": int(new_own),
+            "peer_amount": int(new_peer),
+            "next_hash": own_hash
+        }
+        proposal_response = await NetworkClient.post(f"{peer_url}/propose-update", proposal_payload)
+
+        channel.own_secrets[next_index] = next_secret
+        channel.peer_hashes[next_index] = proposal_response["next_hash"]
+        channel.pending_update = {
+            "role": "proposer",
+            "next_index": next_index,
+            "own_amount": int(new_own),
+            "peer_amount": int(new_peer),
+            "peer_url": peer_url
+        }
+
+    async def trigger_accept_update_logic(self, funding_id: str, peer_url: str):
+        peer_url = peer_url.rstrip("/")
+        channel = self.node.channels[funding_id]
+        pending = channel.pending_update
+        if not pending or pending.get("role") != "responder":
+            raise ValueError("Nessuna proposta pendente da accettare per questo canale")
+
+        old_index = channel.current_index
+        next_index = old_index + 1
+        if pending.get("next_index") != next_index:
+            raise ValueError("Indice della proposta pendente non coerente")
+
+        peer_key = channel.funding.get_peer_contribution(self.node.public_key).public_key
+        own_hash = self.node.hash_sha256(channel.own_secrets[next_index])
+
+        signature_request = {
+            "funding_id": funding_id,
+            "next_hash": own_hash
+        }
+        signature_response = await NetworkClient.post(f"{peer_url}/sign-pending-update", signature_request)
+
+        own_commitment = CommitmentTransaction(
+            funding_id=funding_id, tx_index=next_index, owner=self.node.public_key,
+            own_amount=pending["peer_amount"], peer_amount=pending["own_amount"],
+            revocation_hash=own_hash
+        )
+        if not own_commitment.verify(peer_key, signature_response["signature"]):
+            raise ValueError("La firma del peer sulla proposta non è valida")
+
+        own_commitment.signatures = {peer_key: signature_response["signature"]}
+        channel.commitments[next_index] = own_commitment
+
+        peer_commitment = CommitmentTransaction(
+            funding_id=funding_id, tx_index=next_index, owner=peer_key,
+            own_amount=pending["own_amount"], peer_amount=pending["peer_amount"],
+            revocation_hash=channel.peer_hashes[next_index]
+        )
+        complete_payload = {
+            "funding_id": funding_id,
+            "tx_index": old_index,
+            "secret": channel.own_secrets[old_index],
+            "signature": peer_commitment.sign(self.node.private_key)
+        }
+        complete_response = await NetworkClient.post(f"{peer_url}/complete-update", complete_payload)
+
+        if self.node.hash_sha256(complete_response["secret"]) != channel.peer_hashes[old_index]:
+            raise ValueError("Il segreto di revoca ricevuto dal peer non è corretto")
+
+        channel.revoked_peer_secrets[old_index] = complete_response["secret"]
+        channel.current_index = next_index
+        channel.pending_update = None
 
     async def trigger_update_logic(self, funding_id: str, new_own: int, new_peer: int, peer_url: str):
         peer_url = peer_url.rstrip("/")
