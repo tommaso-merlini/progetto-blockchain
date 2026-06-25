@@ -3,7 +3,11 @@ import subprocess
 import sys
 import time
 import json
+from pathlib import Path
 from urllib.request import urlopen, Request
+
+SRC_DIR = Path(__file__).resolve().parent / "src"
+sys.path.insert(0, str(SRC_DIR))
 
 from http_interface import HttpInterface, NetworkClient
 from node import LightningNode
@@ -82,7 +86,7 @@ class LightningTestBase(unittest.TestCase):
         for name, port in cls.ports.items():
             # Inoltra stderr a sys.stderr per mostrare a schermo i dettagli di un eventuale crash
             cls.nodes[name] = subprocess.Popen(
-                [sys.executable, "main.py", str(port)],
+                [sys.executable, str(SRC_DIR / "main.py"), str(port)],
                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=sys.stderr
             )
         time.sleep(2.5)  # Attesa del boot del server ASGI interno a ciascun nodo
