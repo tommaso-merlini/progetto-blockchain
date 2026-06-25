@@ -352,6 +352,91 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(alice.channels), {first_id, second_id})
         self.assertEqual(set(bob.channels), {first_id, second_id})
 
+    async def test_open_channel_after_finalized_close_does_not_publish_close(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        alice_interface = HttpInterface(alice)
+        bob_interface = HttpInterface(bob)
+        blockchain = MockBlockchain()
+        close_publications = []
+
+        original_fetch_public_key = NetworkClient.__dict__["fetch_public_key"]
+        original_post = NetworkClient.__dict__["post"]
+
+        async def fake_fetch_public_key(peer_url: str) -> str:
+            if peer_url == "bob":
+                return bob.public_key
+            if peer_url == "alice":
+                return alice.public_key
+            raise AssertionError(f"URL peer inatteso: {peer_url}")
+
+        async def call_route(interface, method: str, path: str, payload: dict) -> dict:
+            status, body, _ = await interface.dispatch(
+                method, path, json.dumps(payload).encode()
+            )
+            if status >= 400:
+                raise AssertionError(body.decode())
+            return json.loads(body.decode())
+
+        async def fake_post(url: str, payload: dict) -> dict:
+            if url == "bob/funding":
+                return await call_route(bob_interface, "POST", "/funding", payload)
+            if url == "alice/complete-funding":
+                return await call_route(
+                    alice_interface, "POST", "/complete-funding", payload
+                )
+            if url == "http://localhost:9000/multisig":
+                contributions = [
+                    Contribution(**item)
+                    for item in payload["funding"]["contributions"]
+                ]
+                funding_id = blockchain.add_multisig(
+                    create_funding_transaction(
+                        *contributions,
+                        nonce=payload["funding"]["nonce"],
+                    )
+                )
+                return {"funding_id": funding_id}
+            if url == "http://localhost:9000/close-channel":
+                commitment = CommitmentTransaction.from_dict(payload["commitment"])
+                close_publications.append(commitment.funding_id)
+                pending = blockchain.publish_close(commitment)
+                return {
+                    "funding_id": commitment.funding_id,
+                    "published_at_block": pending.published_at_block,
+                    "deadline_block": pending.deadline_block,
+                }
+            raise AssertionError(f"Endpoint inatteso: {url}")
+
+        NetworkClient.fetch_public_key = staticmethod(fake_fetch_public_key)
+        NetworkClient.post = staticmethod(fake_post)
+        try:
+            first_id = await trigger_fund.run(alice, 50, 50, "bob", "alice")
+            await trigger_accept_funding.run(bob, first_id, "alice")
+
+            status, body, _ = await alice_interface.dispatch(
+                "POST",
+                "/client/close-channel",
+                json.dumps({"funding_id": first_id, "tx_index": 0}).encode(),
+            )
+            self.assertEqual(status, 200, body.decode())
+            for _ in range(3):
+                blockchain.mine_block()
+            blockchain.finalize_close(first_id)
+            self.assertEqual(close_publications, [first_id])
+
+            second_id = await trigger_fund.run(alice, 50, 50, "bob", "alice")
+            await trigger_accept_funding.run(bob, second_id, "alice")
+        finally:
+            NetworkClient.fetch_public_key = original_fetch_public_key
+            NetworkClient.post = original_post
+
+        self.assertNotEqual(first_id, second_id)
+        self.assertEqual(close_publications, [first_id])
+        self.assertTrue(blockchain.multisigs[first_id].spent)
+        self.assertFalse(blockchain.multisigs[second_id].spent)
+        self.assertNotIn(second_id, blockchain.pending_closes)
+
     async def test_responder_rejects_automatic_complete_funding(self):
         alice = LightningNode()
         bob = LightningNode()
@@ -613,6 +698,37 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
             MockBlockchainClient.get_status = original_get_status
             MockBlockchainClient.get_multisig_status = original_get_multisig_status
             MockBlockchainClient.finalize_close = original_finalize_close
+
+    async def test_finalize_close_removes_channel_from_local_status(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        funding_id = attach_test_channel(alice, bob, 50, 50)
+        alice_interface = HttpInterface(alice)
+
+        original_finalize_close = MockBlockchainClient.__dict__["finalize_close"]
+
+        async def fake_finalize_close(requested_funding_id: str) -> dict:
+            self.assertEqual(requested_funding_id, funding_id)
+            return {
+                "funding_id": funding_id,
+                "owner": alice.public_key,
+                "peer": bob.public_key,
+                "owner_amount": 50,
+                "peer_amount": 50,
+            }
+
+        MockBlockchainClient.finalize_close = staticmethod(fake_finalize_close)
+        try:
+            status, body, _ = await alice_interface.dispatch(
+                "POST",
+                "/client/finalize-close",
+                json.dumps({"funding_id": funding_id}).encode(),
+            )
+        finally:
+            MockBlockchainClient.finalize_close = original_finalize_close
+
+        self.assertEqual(status, 200, body.decode())
+        self.assertNotIn(funding_id, alice.channels)
 
     def test_mock_blockchain_rejects_tampered_commitment_amounts(self):
         alice = LightningNode()
