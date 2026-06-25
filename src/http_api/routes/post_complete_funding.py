@@ -2,6 +2,8 @@ import json
 
 from lightningnetwork import Channel, CommitmentTransaction, LightningNode
 
+from ..blockchain_client import MockBlockchainClient
+
 
 async def handle(node: LightningNode, body: bytes):
     try:
@@ -35,6 +37,7 @@ async def handle(node: LightningNode, body: bytes):
         channel.peer_hashes[0] = pending.peer_hash
         own_commitment.signatures = {peer_key: data["signature"]}
         channel.commitments[0] = own_commitment
+        await MockBlockchainClient.register_multisig(funding)
         node.channels[funding.id] = channel
         del node.pending_fundings[funding.id]
 

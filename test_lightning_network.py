@@ -1,4 +1,5 @@
 import unittest
+import os
 import subprocess
 import sys
 import time
@@ -10,6 +11,7 @@ SRC_DIR = Path(__file__).resolve().parent / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from http_api import HttpInterface, NetworkClient
+from http_api.blockchain_client import MockBlockchainClient
 from http_api.routes import trigger_fund
 from lightningnetwork import (
     Channel,
@@ -18,6 +20,7 @@ from lightningnetwork import (
     LightningNode,
     create_funding_transaction,
 )
+from mock_blockchain import MockBlockchain
 
 
 def attach_test_channel(node: LightningNode, peer: LightningNode, own: int, peer_amount: int):
@@ -159,6 +162,8 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
                 return await call_route(
                     bob_interface, "POST", "/complete-funding", payload
                 )
+            if url == "http://localhost:9000/multisig":
+                return {"funding_id": "mocked"}
             raise AssertionError(f"Endpoint inatteso: {url}")
 
         NetworkClient.fetch_public_key = staticmethod(fake_fetch_public_key)
@@ -183,15 +188,88 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bob_channel.peer_hashes[0], alice_hash)
         self.assertNotIn(funding_id, bob.pending_fundings)
 
+    async def test_close_channel_publishes_commitment_with_both_signatures(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        funding_id = attach_test_channel(alice, bob, 50, 50)
+        blockchain = MockBlockchain()
+        blockchain.add_multisig(alice.channels[funding_id].funding)
+        alice_interface = HttpInterface(alice)
+
+        original_publish_close = MockBlockchainClient.__dict__["publish_close"]
+
+        async def fake_publish_close(commitment: CommitmentTransaction) -> dict:
+            pending = blockchain.publish_close(commitment)
+            return {
+                "funding_id": commitment.funding_id,
+                "published_at_block": pending.published_at_block,
+                "deadline_block": pending.deadline_block,
+            }
+
+        MockBlockchainClient.publish_close = staticmethod(fake_publish_close)
+        try:
+            status, body, _ = await alice_interface.dispatch(
+                "POST",
+                "/client/close-channel",
+                json.dumps({"funding_id": funding_id, "tx_index": 0}).encode(),
+            )
+        finally:
+            MockBlockchainClient.publish_close = original_publish_close
+
+        self.assertEqual(status, 200, body.decode())
+        response = json.loads(body.decode())
+        self.assertEqual(response["deadline_block"], 3)
+        pending = blockchain.pending_closes[funding_id]
+        self.assertIn(alice.public_key, pending.commitment.signatures)
+        self.assertIn(bob.public_key, pending.commitment.signatures)
+
+    def test_mock_blockchain_rejects_tampered_commitment_amounts(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        funding = create_funding_transaction(
+            Contribution(alice.public_key, 50),
+            Contribution(bob.public_key, 50),
+        )
+        blockchain = MockBlockchain()
+        blockchain.add_multisig(funding)
+
+        commitment = CommitmentTransaction(
+            funding_id=funding.id,
+            tx_index=0,
+            owner=alice.public_key,
+            own_amount=50,
+            peer_amount=50,
+            revocation_hash=alice.hash_sha256("secret"),
+        )
+        commitment.signatures = {
+            alice.public_key: commitment.sign(alice.private_key),
+            bob.public_key: commitment.sign(bob.private_key),
+        }
+
+        tampered = CommitmentTransaction.from_dict(commitment.to_dict())
+        tampered.own_amount = 90
+        tampered.peer_amount = 10
+        with self.assertRaisesRegex(ValueError, "Firma non valida"):
+            blockchain.publish_close(tampered)
+
 
 class LightningTestBase(unittest.TestCase):
     nodes = {}
+    blockchain = None
     ports = {"Alice": 8001, "Bob": 8002, "Carol": 8003, "Dave": 8004}
     node_key_to_name = {}
 
     @classmethod
     def setUpClass(cls):
         """Avvia i nodi della rete in isolamento completo su porte HTTP distinte."""
+        blockchain_env = dict(os.environ)
+        blockchain_env["MOCK_BLOCK_INTERVAL_SECONDS"] = "0.2"
+        cls.blockchain = subprocess.Popen(
+            [sys.executable, str(SRC_DIR / "mock_blockchain" / "main.py"), "9000"],
+            stdout=subprocess.DEVNULL,
+            stderr=sys.stderr,
+            env=blockchain_env,
+        )
         for name, port in cls.ports.items():
             # Inoltra stderr a sys.stderr per mostrare a schermo i dettagli di un eventuale crash
             cls.nodes[name] = subprocess.Popen(
@@ -221,6 +299,10 @@ class LightningTestBase(unittest.TestCase):
             node.terminate()
             node.wait()
         cls.nodes.clear()
+        if cls.blockchain is not None:
+            cls.blockchain.terminate()
+            cls.blockchain.wait()
+            cls.blockchain = None
 
     def setUp(self):
         self.steps = []

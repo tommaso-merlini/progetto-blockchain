@@ -35,3 +35,27 @@ class CommitmentTransaction:
             return True
         except (InvalidSignature, ValueError):
             return False
+
+    def to_dict(self) -> dict:
+        return {
+            "funding_id": self.funding_id,
+            "tx_index": self.tx_index,
+            "owner": self.owner,
+            "own_amount": self.own_amount,
+            "peer_amount": self.peer_amount,
+            "revocation_hash": self.revocation_hash,
+            "signatures": dict(self.signatures),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CommitmentTransaction":
+        commitment = cls(
+            funding_id=data["funding_id"],
+            tx_index=data["tx_index"],
+            owner=data["owner"],
+            own_amount=data["own_amount"],
+            peer_amount=data["peer_amount"],
+            revocation_hash=data["revocation_hash"],
+        )
+        commitment.signatures = dict(data.get("signatures", {}))
+        return commitment

@@ -2,6 +2,7 @@ from . import (
     get_public_key,
     get_status,
     post_client_accept_update,
+    post_client_close_channel,
     post_client_fund,
     post_client_propose_update,
     post_complete_funding,
@@ -11,6 +12,7 @@ from . import (
     post_revoke_state,
     post_sign_pending_update,
     trigger_accept_update,
+    trigger_close_channel,
     trigger_fund,
     trigger_propose_update,
 )
@@ -19,6 +21,7 @@ __all__ = [
     "get_public_key",
     "get_status",
     "post_client_accept_update",
+    "post_client_close_channel",
     "post_client_fund",
     "post_client_propose_update",
     "post_complete_funding",
@@ -28,6 +31,7 @@ __all__ = [
     "post_revoke_state",
     "post_sign_pending_update",
     "trigger_accept_update",
+    "trigger_close_channel",
     "trigger_fund",
     "trigger_propose_update",
 ]

@@ -9,6 +9,7 @@ from lightningnetwork import (
 )
 
 from ..client import NetworkClient
+from ..blockchain_client import MockBlockchainClient
 
 
 async def run(
@@ -72,5 +73,6 @@ async def run(
 
     own_commitment.signatures = {peer_key: complete_response["signature"]}
     channel.commitments[0] = own_commitment
+    await MockBlockchainClient.register_multisig(funding)
     node.channels[funding.id] = channel
     return funding.id

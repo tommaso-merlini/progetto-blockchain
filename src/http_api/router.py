@@ -4,6 +4,7 @@ from .routes import (
     get_public_key,
     get_status,
     post_client_accept_update,
+    post_client_close_channel,
     post_client_fund,
     post_client_propose_update,
     post_complete_funding,
@@ -45,6 +46,8 @@ class HttpInterface:
                 return await post_client_propose_update.handle(self.node, body)
             case "POST", "/client/accept-update":
                 return await post_client_accept_update.handle(self.node, body)
+            case "POST", "/client/close-channel":
+                return await post_client_close_channel.handle(self.node, body)
             case _:
                 return 404, b"Not Found\n", b"text/plain"
 
