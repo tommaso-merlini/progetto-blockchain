@@ -1,5 +1,6 @@
 import hashlib
 import json
+import secrets
 from dataclasses import asdict, dataclass
 
 @dataclass(frozen=True, order=True)
@@ -17,6 +18,7 @@ class MultisigOutput:
 class FundingTransaction:
     contributions: tuple[Contribution, Contribution]
     output: MultisigOutput
+    nonce: str
 
     def serialize(self) -> bytes:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode()
@@ -39,13 +41,21 @@ class FundingTransaction:
                 return contribution
         raise ValueError("Contribuzione locale non trovata nelle contribuzioni.")
 
-def create_funding_transaction(own: Contribution, peer: Contribution) -> FundingTransaction:
+def create_funding_transaction(
+    own: Contribution,
+    peer: Contribution,
+    nonce: str | None = None,
+) -> FundingTransaction:
     if own.amount < 0 or peer.amount < 0:
         raise ValueError("Le contribuzioni non possono essere negative")
     if own.public_key == peer.public_key:
         raise ValueError("Le chiavi pubbliche devono essere differenti")
+    if nonce is None:
+        nonce = secrets.token_hex(32)
+    elif type(nonce) is not str or not nonce:
+        raise ValueError("Il nonce della funding deve essere una stringa non vuota")
 
     contributions = tuple(sorted((own, peer)))
     public_keys = tuple(item.public_key for item in contributions)
     output = MultisigOutput(own.amount + peer.amount, public_keys)
-    return FundingTransaction(contributions, output)
+    return FundingTransaction(contributions, output, nonce)

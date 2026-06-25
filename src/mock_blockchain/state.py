@@ -28,7 +28,7 @@ class PendingClose:
 
 def funding_from_dict(data: dict) -> FundingTransaction:
     contributions = [Contribution(**item) for item in data["contributions"]]
-    return create_funding_transaction(*contributions)
+    return create_funding_transaction(*contributions, nonce=data["nonce"])
 
 
 class MockBlockchain:

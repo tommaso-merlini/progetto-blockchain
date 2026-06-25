@@ -13,7 +13,10 @@ async def handle(node: LightningNode, body: bytes):
         data = json.loads(body)
         funding_data = data["funding"]
         contributions = [Contribution(**c) for c in funding_data["contributions"]]
-        funding = create_funding_transaction(*contributions)
+        funding = create_funding_transaction(
+            *contributions,
+            nonce=funding_data["nonce"],
+        )
         funding.get_own_contribution(node.public_key)
         funding.get_peer_contribution(node.public_key)
         if funding.id in node.pending_fundings:

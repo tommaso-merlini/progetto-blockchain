@@ -221,6 +221,56 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(funding_id, alice.pending_fundings)
         self.assertNotIn(funding_id, bob.pending_fundings)
 
+    async def test_same_peers_and_balances_can_open_multiple_channels(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        alice_interface = HttpInterface(alice)
+        bob_interface = HttpInterface(bob)
+
+        original_fetch_public_key = NetworkClient.__dict__["fetch_public_key"]
+        original_post = NetworkClient.__dict__["post"]
+
+        async def fake_fetch_public_key(peer_url: str) -> str:
+            if peer_url == "bob":
+                return bob.public_key
+            if peer_url == "alice":
+                return alice.public_key
+            raise AssertionError(f"URL peer inatteso: {peer_url}")
+
+        async def call_route(interface, method: str, path: str, payload: dict) -> dict:
+            status, body, _ = await interface.dispatch(
+                method, path, json.dumps(payload).encode()
+            )
+            if status >= 400:
+                raise AssertionError(body.decode())
+            return json.loads(body.decode())
+
+        async def fake_post(url: str, payload: dict) -> dict:
+            if url == "bob/funding":
+                return await call_route(bob_interface, "POST", "/funding", payload)
+            if url == "alice/complete-funding":
+                return await call_route(
+                    alice_interface, "POST", "/complete-funding", payload
+                )
+            if url == "http://localhost:9000/multisig":
+                return {"funding_id": "registered"}
+            raise AssertionError(f"Endpoint inatteso: {url}")
+
+        NetworkClient.fetch_public_key = staticmethod(fake_fetch_public_key)
+        NetworkClient.post = staticmethod(fake_post)
+        try:
+            first_id = await trigger_fund.run(alice, 50, 70, "bob", "alice")
+            await trigger_accept_funding.run(bob, first_id, "alice")
+            second_id = await trigger_fund.run(alice, 50, 70, "bob", "alice")
+            await trigger_accept_funding.run(bob, second_id, "alice")
+        finally:
+            NetworkClient.fetch_public_key = original_fetch_public_key
+            NetworkClient.post = original_post
+
+        self.assertNotEqual(first_id, second_id)
+        self.assertEqual(set(alice.channels), {first_id, second_id})
+        self.assertEqual(set(bob.channels), {first_id, second_id})
+
     async def test_responder_rejects_automatic_complete_funding(self):
         alice = LightningNode()
         bob = LightningNode()
