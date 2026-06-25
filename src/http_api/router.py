@@ -9,6 +9,7 @@ from .routes import (
     post_client_accept_funding,
     post_client_accept_update,
     post_client_close_channel,
+    post_client_claim_revoked_close,
     post_client_finalize_close,
     post_client_fund,
     post_client_propose_update,
@@ -63,6 +64,8 @@ class HttpInterface:
                 return await post_client_accept_update.handle(self.node, body)
             case "POST", "/client/close-channel":
                 return await post_client_close_channel.handle(self.node, body)
+            case "POST", "/client/claim-revoked-close":
+                return await post_client_claim_revoked_close.handle(self.node, body)
             case "POST", "/client/finalize-close":
                 return await post_client_finalize_close.handle(self.node, body)
             case _:

@@ -58,6 +58,16 @@ class MockBlockchainApp:
                 data = json.loads(body)
                 return self.json_response(self.state.finalize_close(data["funding_id"]))
 
+            if method == "POST" and path == "/claim-revoked-close":
+                data = json.loads(body)
+                return self.json_response(
+                    self.state.claim_revoked_close(
+                        data["funding_id"],
+                        data["claimant"],
+                        data["secret"],
+                    )
+                )
+
             return 404, b"Not Found\n", b"text/plain"
         except Exception as e:
             return 400, json.dumps({"error": str(e)}).encode(), b"application/json"

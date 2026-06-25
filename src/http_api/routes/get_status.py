@@ -7,10 +7,23 @@ async def handle(node: LightningNode, body: bytes):
     status_data = {}
     for channel_id, channel in node.channels.items():
         current_commitment = channel.commitments[channel.current_index]
+        capacity = channel.funding.output.amount
         status_data[channel_id] = {
             "current_index": channel.current_index,
             "own_amount": current_commitment.own_amount,
             "peer_amount": current_commitment.peer_amount,
+            "capacity": capacity,
+            "commitments": [
+                {
+                    "tx_index": commitment.tx_index,
+                    "own_amount": commitment.own_amount,
+                    "peer_amount": commitment.peer_amount,
+                    "capacity": capacity,
+                    "is_current": tx_index == channel.current_index,
+                }
+                for tx_index, commitment in sorted(channel.commitments.items())
+            ],
+            "revoked_peer_state_indices": sorted(channel.revoked_peer_secrets),
         }
         if channel.peer_url:
             status_data[channel_id]["peer_url"] = channel.peer_url

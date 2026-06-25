@@ -1,4 +1,5 @@
 import json
+import hashlib
 from dataclasses import dataclass
 
 from lightningnetwork import (
@@ -125,6 +126,37 @@ class MockBlockchain:
             "peer": peer,
             "owner_amount": commitment.own_amount,
             "peer_amount": commitment.peer_amount,
+        }
+
+    def claim_revoked_close(self, funding_id: str, claimant: str, secret: str) -> dict:
+        pending = self.pending_closes.get(funding_id)
+        if pending is None:
+            raise ValueError("Nessuna chiusura pendente per questo funding")
+
+        record = self.multisigs[funding_id]
+        if record.spent:
+            raise ValueError("Multisig gia' speso")
+
+        commitment = pending.commitment
+        public_keys = record.funding.output.public_keys
+        if claimant not in public_keys:
+            raise ValueError("Il claimant non appartiene al multisig")
+        if claimant == commitment.owner:
+            raise ValueError("L'owner della commitment non puo' reclamare la propria close")
+
+        expected_hash = hashlib.sha256(secret.encode()).hexdigest()
+        if expected_hash != commitment.revocation_hash:
+            raise ValueError("Secret di revoca non valido per la close pendente")
+
+        claimed_amount = record.funding.output.amount
+        self.balances[claimant] = self.balances.get(claimant, 0) + claimed_amount
+        record.spent = True
+        del self.pending_closes[funding_id]
+        return {
+            "funding_id": funding_id,
+            "claimant": claimant,
+            "owner": commitment.owner,
+            "claimed_amount": claimed_amount,
         }
 
     def multisig_status(self, funding_id: str) -> dict:

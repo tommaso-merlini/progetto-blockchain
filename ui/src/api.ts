@@ -5,10 +5,21 @@ export type PendingUpdate = {
   peer_amount: number;
 };
 
+export type ChannelCommitmentStatus = {
+  tx_index: number;
+  own_amount: number;
+  peer_amount: number;
+  capacity: number;
+  is_current: boolean;
+};
+
 export type ChannelStatus = {
   current_index: number;
   own_amount: number;
   peer_amount: number;
+  capacity: number;
+  commitments: ChannelCommitmentStatus[];
+  revoked_peer_state_indices: number[];
   peer_url?: string;
   pending_update?: PendingUpdate;
 };

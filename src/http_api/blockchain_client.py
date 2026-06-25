@@ -37,3 +37,14 @@ class MockBlockchainClient:
             f"{MOCK_BLOCKCHAIN_URL}/finalize-close",
             {"funding_id": funding_id},
         )
+
+    @staticmethod
+    async def claim_revoked_close(funding_id: str, claimant: str, secret: str) -> dict:
+        return await NetworkClient.post(
+            f"{MOCK_BLOCKCHAIN_URL}/claim-revoked-close",
+            {
+                "funding_id": funding_id,
+                "claimant": claimant,
+                "secret": secret,
+            },
+        )

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import {
   BlockchainStatus,
+  ChannelCommitmentStatus,
   ChannelStatus,
   MultisigStatus,
   PendingFundingStatus,
@@ -26,6 +27,13 @@ import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./components/ui/select";
 
 const API_URL_STORAGE_KEY = "lightning-dashboard-api-url";
 const LAST_PEER_URL_STORAGE_KEY = "lightning-dashboard-last-peer-url";
@@ -76,8 +84,16 @@ type FinalizeCloseResponse = {
   peer_amount: number;
 };
 
+type ClaimRevokedCloseResponse = {
+  funding_id: string;
+  claimant: string;
+  owner: string;
+  claimed_amount: number;
+};
+
 type ActiveDialog = "propose" | "accept" | "acceptFunding" | null;
 type ChannelPeerUrls = Record<string, string>;
+type CloseTxSelections = Record<string, number>;
 
 function normalizeUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
@@ -113,6 +129,28 @@ function chainStatusLabel(multisig?: MultisigStatus): string {
 
 function channelEntries(status: StatusResponse): Array<[string, ChannelStatus]> {
   return Object.entries(status).sort(([left], [right]) => left.localeCompare(right));
+}
+
+function getCloseCommitments(channel: ChannelStatus): ChannelCommitmentStatus[] {
+  if (channel.commitments.length > 0) {
+    return channel.commitments;
+  }
+
+  const capacity = channel.capacity ?? channel.own_amount + channel.peer_amount;
+  return [
+    {
+      tx_index: channel.current_index,
+      own_amount: channel.own_amount,
+      peer_amount: channel.peer_amount,
+      capacity,
+      is_current: true,
+    },
+  ];
+}
+
+function closeStateLabel(commitment: ChannelCommitmentStatus): string {
+  const state = commitment.is_current ? "Current" : "Past state";
+  return `State #${commitment.tx_index} (${state}) - Local ${commitment.own_amount} / Remote ${commitment.peer_amount} / Capacity ${commitment.capacity}`;
 }
 
 function readChannelPeerUrls(): ChannelPeerUrls {
@@ -255,6 +293,8 @@ function App() {
   const [channelPeerUrls, setChannelPeerUrls] = useState<ChannelPeerUrls>(() =>
     readChannelPeerUrls(),
   );
+  const [selectedCloseTxIndices, setSelectedCloseTxIndices] =
+    useState<CloseTxSelections>({});
   const [lastPeerUrl, setLastPeerUrl] = useState(() => {
     return localStorage.getItem(LAST_PEER_URL_STORAGE_KEY) ?? "";
   });
@@ -462,6 +502,31 @@ function App() {
   }, [channels, normalizedApiUrl]);
 
   useEffect(() => {
+    setSelectedCloseTxIndices((current) => {
+      const next: CloseTxSelections = {};
+      let changed = false;
+
+      for (const [channelId, channel] of channels) {
+        const commitments = getCloseCommitments(channel);
+        const selected = current[channelId];
+        const hasSelected =
+          selected !== undefined &&
+          commitments.some((commitment) => commitment.tx_index === selected);
+        next[channelId] = hasSelected ? selected : channel.current_index;
+        if (current[channelId] !== next[channelId]) {
+          changed = true;
+        }
+      }
+
+      if (Object.keys(current).length !== channels.length) {
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [channels]);
+
+  useEffect(() => {
     if (!channels[0]) {
       return;
     }
@@ -618,6 +683,22 @@ function App() {
         }),
       (result) => {
         return `Close finalized: local owner received ${result.owner_amount}, peer received ${result.peer_amount}.`;
+      },
+    );
+  }
+
+  function handleClaimRevokedClose(channelId: string) {
+    void runAction(
+      () =>
+        apiPost<ClaimRevokedCloseResponse>(
+          normalizedApiUrl,
+          "/client/claim-revoked-close",
+          {
+            funding_id: channelId,
+          },
+        ),
+      (result) => {
+        return `Close claimed with revocation secret: ${result.claimed_amount} received.`;
       },
     );
   }
@@ -827,7 +908,28 @@ function App() {
                 const peerUrl = getSuggestedPeerUrl(channelId, channel);
                 const multisig = blockchainStatus?.multisigs[channelId];
                 const pendingClose = multisig?.pending_close;
+                const closeCommitments = getCloseCommitments(channel);
+                const selectedCloseTxIndex =
+                  selectedCloseTxIndices[channelId] ?? channel.current_index;
+                const selectedCloseCommitment =
+                  closeCommitments.find(
+                    (commitment) =>
+                      commitment.tx_index === selectedCloseTxIndex,
+                  ) ??
+                  closeCommitments.find((commitment) => commitment.is_current) ??
+                  closeCommitments[0];
+                const publishCloseTxIndex =
+                  selectedCloseCommitment?.tx_index ?? channel.current_index;
                 const isChainBlocked = Boolean(pendingClose || multisig?.spent);
+                const canClaimRevokedClose = Boolean(
+                  publicKey &&
+                    pendingClose &&
+                    !multisig?.spent &&
+                    pendingClose.commitment.owner !== publicKey &&
+                    channel.revoked_peer_state_indices.includes(
+                      pendingClose.commitment.tx_index,
+                    ),
+                );
                 const canFinalize = Boolean(
                   blockchainStatus &&
                     pendingClose &&
@@ -927,6 +1029,40 @@ function App() {
                           </small>
                         )}
                       </div>
+                      <Field
+                        htmlFor={`close-state-${channelId}`}
+                        label="Close state"
+                      >
+                        <Select
+                          disabled={
+                            isLoading ||
+                            Boolean(pending) ||
+                            isChainBlocked ||
+                            !multisig
+                          }
+                          value={String(publishCloseTxIndex)}
+                          onValueChange={(value) =>
+                            setSelectedCloseTxIndices((current) => ({
+                              ...current,
+                              [channelId]: Number(value),
+                            }))
+                          }
+                        >
+                          <SelectTrigger id={`close-state-${channelId}`}>
+                            <SelectValue placeholder="Select close state" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {closeCommitments.map((commitment) => (
+                              <SelectItem
+                                key={commitment.tx_index}
+                                value={String(commitment.tx_index)}
+                              >
+                                {closeStateLabel(commitment)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </Field>
                       <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-1">
                         <Button
                           size="sm"
@@ -960,14 +1096,27 @@ function App() {
                             isChainBlocked ||
                             !multisig
                           }
-                          title="Publish the current signed commitment to the mock blockchain"
+                          title="Publish the selected signed commitment to the mock blockchain"
                           onClick={() =>
-                            handleCloseChannel(channelId, channel.current_index)
+                            handleCloseChannel(channelId, publishCloseTxIndex)
                           }
                         >
                           <Lock className="size-4" />
                           Publish close
                         </Button>
+                        {canClaimRevokedClose && (
+                          <Button
+                            size="sm"
+                            type="button"
+                            variant="secondary"
+                            disabled={isLoading}
+                            title="Claim the pending close with the stored revocation secret"
+                            onClick={() => handleClaimRevokedClose(channelId)}
+                          >
+                            <Check className="size-4" />
+                            Claim close
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           type="button"

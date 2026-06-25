@@ -48,6 +48,87 @@ def attach_test_channel(node: LightningNode, peer: LightningNode, own: int, peer
     node.channels[funding.id] = channel
     return funding.id
 
+
+def attach_claimable_channel_pair(alice: LightningNode, bob: LightningNode) -> str:
+    funding = create_funding_transaction(
+        Contribution(alice.public_key, 50),
+        Contribution(bob.public_key, 50),
+    )
+
+    alice_secret_0 = alice.generate_secret()
+    alice_secret_1 = alice.generate_secret()
+    bob_secret_0 = bob.generate_secret()
+    bob_secret_1 = bob.generate_secret()
+
+    alice_channel = Channel(funding=funding, current_index=1)
+    alice_channel.own_secrets[0] = alice_secret_0
+    alice_channel.own_secrets[1] = alice_secret_1
+    alice_channel.peer_hashes[0] = bob.hash_sha256(bob_secret_0)
+    alice_channel.peer_hashes[1] = bob.hash_sha256(bob_secret_1)
+    alice_channel.revoked_peer_secrets[0] = bob_secret_0
+
+    alice_old_commitment = CommitmentTransaction(
+        funding_id=funding.id,
+        tx_index=0,
+        owner=alice.public_key,
+        own_amount=60,
+        peer_amount=40,
+        revocation_hash=alice.hash_sha256(alice_secret_0),
+    )
+    alice_old_commitment.signatures = {
+        bob.public_key: alice_old_commitment.sign(bob.private_key)
+    }
+    alice_current_commitment = CommitmentTransaction(
+        funding_id=funding.id,
+        tx_index=1,
+        owner=alice.public_key,
+        own_amount=40,
+        peer_amount=60,
+        revocation_hash=alice.hash_sha256(alice_secret_1),
+    )
+    alice_current_commitment.signatures = {
+        bob.public_key: alice_current_commitment.sign(bob.private_key)
+    }
+    alice_channel.commitments[0] = alice_old_commitment
+    alice_channel.commitments[1] = alice_current_commitment
+    alice.channels[funding.id] = alice_channel
+
+    bob_channel = Channel(funding=funding, current_index=1)
+    bob_channel.own_secrets[0] = bob_secret_0
+    bob_channel.own_secrets[1] = bob_secret_1
+    bob_channel.peer_hashes[0] = alice.hash_sha256(alice_secret_0)
+    bob_channel.peer_hashes[1] = alice.hash_sha256(alice_secret_1)
+    bob_channel.revoked_peer_secrets[0] = alice_secret_0
+
+    bob_old_commitment = CommitmentTransaction(
+        funding_id=funding.id,
+        tx_index=0,
+        owner=bob.public_key,
+        own_amount=40,
+        peer_amount=60,
+        revocation_hash=bob.hash_sha256(bob_secret_0),
+    )
+    bob_old_commitment.signatures = {
+        alice.public_key: bob_old_commitment.sign(alice.private_key)
+    }
+    bob_current_commitment = CommitmentTransaction(
+        funding_id=funding.id,
+        tx_index=1,
+        owner=bob.public_key,
+        own_amount=60,
+        peer_amount=40,
+        revocation_hash=bob.hash_sha256(bob_secret_1),
+    )
+    bob_current_commitment.signatures = {
+        alice.public_key: bob_current_commitment.sign(alice.private_key)
+    }
+    bob_channel.commitments[0] = bob_old_commitment
+    bob_channel.commitments[1] = bob_current_commitment
+    bob.channels[funding.id] = bob_channel
+
+    return funding.id
+
+
 def json_post(url: str, payload: dict) -> dict:
     """Invia una richiesta HTTP POST con payload JSON di utilità per i test."""
     request = Request(
@@ -318,6 +399,30 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(funding.id, bob.channels)
         self.assertIn(funding.id, bob.pending_fundings)
 
+    async def test_status_exposes_local_commitment_history(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        funding_id = attach_claimable_channel_pair(alice, bob)
+        alice_interface = HttpInterface(alice)
+
+        status, body, _ = await alice_interface.dispatch("GET", "/status", b"")
+
+        self.assertEqual(status, 200, body.decode())
+        channel = json.loads(body.decode())[funding_id]
+        self.assertEqual(channel["capacity"], 100)
+        self.assertEqual(channel["revoked_peer_state_indices"], [0])
+        self.assertEqual(
+            [
+                (commitment["tx_index"], commitment["own_amount"], commitment["peer_amount"])
+                for commitment in channel["commitments"]
+            ],
+            [(0, 60, 40), (1, 40, 60)],
+        )
+        self.assertFalse(channel["commitments"][0]["is_current"])
+        self.assertTrue(channel["commitments"][1]["is_current"])
+        self.assertNotIn("revocation_hash", channel["commitments"][0])
+        self.assertNotIn("signatures", channel["commitments"][0])
+
     async def test_close_channel_publishes_commitment_with_both_signatures(self):
         alice = LightningNode()
         bob = LightningNode()
@@ -352,6 +457,108 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         pending = blockchain.pending_closes[funding_id]
         self.assertIn(alice.public_key, pending.commitment.signatures)
         self.assertIn(bob.public_key, pending.commitment.signatures)
+
+    async def test_close_channel_can_publish_past_local_commitment(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        funding_id = attach_claimable_channel_pair(alice, bob)
+        blockchain = MockBlockchain()
+        blockchain.add_multisig(alice.channels[funding_id].funding)
+        alice_interface = HttpInterface(alice)
+
+        original_publish_close = MockBlockchainClient.__dict__["publish_close"]
+
+        async def fake_publish_close(commitment: CommitmentTransaction) -> dict:
+            pending = blockchain.publish_close(commitment)
+            return {
+                "funding_id": commitment.funding_id,
+                "published_at_block": pending.published_at_block,
+                "deadline_block": pending.deadline_block,
+            }
+
+        MockBlockchainClient.publish_close = staticmethod(fake_publish_close)
+        try:
+            status, body, _ = await alice_interface.dispatch(
+                "POST",
+                "/client/close-channel",
+                json.dumps({"funding_id": funding_id, "tx_index": 0}).encode(),
+            )
+        finally:
+            MockBlockchainClient.publish_close = original_publish_close
+
+        self.assertEqual(status, 200, body.decode())
+        pending = blockchain.pending_closes[funding_id]
+        self.assertEqual(pending.commitment.tx_index, 0)
+        self.assertEqual(pending.commitment.own_amount, 60)
+        self.assertEqual(pending.commitment.peer_amount, 40)
+
+    async def test_peer_claims_full_capacity_with_revocation_secret(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        funding_id = attach_claimable_channel_pair(alice, bob)
+        blockchain = MockBlockchain()
+        blockchain.add_multisig(alice.channels[funding_id].funding)
+        alice_interface = HttpInterface(alice)
+        bob_interface = HttpInterface(bob)
+
+        original_publish_close = MockBlockchainClient.__dict__["publish_close"]
+        original_get_multisig_status = MockBlockchainClient.__dict__[
+            "get_multisig_status"
+        ]
+        original_claim_revoked_close = MockBlockchainClient.__dict__[
+            "claim_revoked_close"
+        ]
+
+        async def fake_publish_close(commitment: CommitmentTransaction) -> dict:
+            pending = blockchain.publish_close(commitment)
+            return {
+                "funding_id": commitment.funding_id,
+                "published_at_block": pending.published_at_block,
+                "deadline_block": pending.deadline_block,
+            }
+
+        async def fake_get_multisig_status(funding_id: str) -> dict:
+            return blockchain.multisig_status(funding_id)
+
+        async def fake_claim_revoked_close(
+            funding_id: str, claimant: str, secret: str
+        ) -> dict:
+            return blockchain.claim_revoked_close(funding_id, claimant, secret)
+
+        MockBlockchainClient.publish_close = staticmethod(fake_publish_close)
+        MockBlockchainClient.get_multisig_status = staticmethod(
+            fake_get_multisig_status
+        )
+        MockBlockchainClient.claim_revoked_close = staticmethod(
+            fake_claim_revoked_close
+        )
+        try:
+            status, body, _ = await alice_interface.dispatch(
+                "POST",
+                "/client/close-channel",
+                json.dumps({"funding_id": funding_id, "tx_index": 0}).encode(),
+            )
+            self.assertEqual(status, 200, body.decode())
+
+            status, body, _ = await bob_interface.dispatch(
+                "POST",
+                "/client/claim-revoked-close",
+                json.dumps({"funding_id": funding_id}).encode(),
+            )
+        finally:
+            MockBlockchainClient.publish_close = original_publish_close
+            MockBlockchainClient.get_multisig_status = original_get_multisig_status
+            MockBlockchainClient.claim_revoked_close = original_claim_revoked_close
+
+        self.assertEqual(status, 200, body.decode())
+        response = json.loads(body.decode())
+        self.assertEqual(response["claimant"], bob.public_key)
+        self.assertEqual(response["owner"], alice.public_key)
+        self.assertEqual(response["claimed_amount"], 100)
+        self.assertEqual(blockchain.balances[bob.public_key], 100)
+        self.assertTrue(blockchain.multisigs[funding_id].spent)
+        self.assertNotIn(funding_id, blockchain.pending_closes)
+        self.assertNotIn(funding_id, bob.channels)
 
     async def test_node_exposes_mock_blockchain_proxy_routes(self):
         node = LightningNode()
