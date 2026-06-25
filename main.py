@@ -6,7 +6,7 @@ import uvicorn
 from node import LightningNode
 from http_interface import HttpInterface
 
-# Componenti core a livello di modulo per consentire il caricamento tramite stringa ("main:app")
+# Componenti core condivisi da CLI e server HTTP.
 node = LightningNode()
 interface = HttpInterface(node)
 
@@ -34,15 +34,45 @@ class ChannelCLI:
         command = tokens[0]
         
         if command == "fund":
+            if len(tokens) != 4:
+                print("Uso: fund <own_amount> <peer_amount> <peer_url>")
+                return
             try:
-                funding_id = await self.interface.trigger_fund_logic(tokens[1], tokens[2], tokens[3])
+                own_amount = int(tokens[1])
+                peer_amount = int(tokens[2])
+            except ValueError:
+                print("[ERRORE] Gli importi di fund devono essere numeri interi.")
+                return
+            try:
+                funding_id = await self.interface.trigger_fund_logic(own_amount, peer_amount, tokens[3])
                 print(f"\n[OK] Canale aperto con ID: {funding_id}")
             except Exception as e: 
                 print(f"[ERRORE] Apertura canale fallita: {e}")
                 
         elif command == "update":
+            if len(tokens) != 5:
+                print("Uso: update <funding_id> <new_own_amount> <new_peer_amount> <peer_url>")
+                return
+            funding_id = tokens[1]
+            if funding_id not in self.node.channels:
+                print(f"[ERRORE] Canale non trovato: {funding_id}")
+                return
             try:
-                await self.interface.trigger_update_logic(tokens[1], tokens[2], tokens[3], tokens[4])
+                new_own = int(tokens[2])
+                new_peer = int(tokens[3])
+            except ValueError:
+                print("[ERRORE] I nuovi bilanci devono essere numeri interi.")
+                return
+            capacity = self.node.channels[funding_id].funding.output.amount
+            if new_own + new_peer != capacity:
+                print(
+                    f"[ERRORE] Bilanci non validi: {new_own} + {new_peer} = "
+                    f"{new_own + new_peer}, ma la capacità del canale è {capacity}."
+                )
+                print("Suggerimento: update vuole il nuovo stato completo, non l'importo da pagare.")
+                return
+            try:
+                await self.interface.trigger_update_logic(funding_id, new_own, new_peer, tokens[4])
                 print(f"\n[OK] Canale aggiornato.")
             except Exception as e: 
                 print(f"[ERRORE] Aggiornamento del canale fallito: {e}")
@@ -56,6 +86,9 @@ class ChannelCLI:
                 print(f"  Stato Indice Corrente: {channel.current_index}")
                 print(f"  Bilancio Locale: {current_commitment.own_amount}")
                 print(f"  Bilancio Remoto: {current_commitment.peer_amount}")
+        else:
+            print(f"[ERRORE] Comando sconosciuto: {command}")
+            print("Comandi disponibili: fund, update, status")
 
 
 async def main_async() -> None:
@@ -65,9 +98,9 @@ async def main_async() -> None:
     port = int(sys.argv[1])
     cli = ChannelCLI(node, interface)
     
-    # Parametri puliti e compatibili con qualsiasi versione di Uvicorn
+    # Usa l'app già in memoria: così CLI e server HTTP condividono lo stesso nodo.
     config = uvicorn.Config(
-        "main:app",
+        app,
         host="0.0.0.0", 
         port=port, 
         log_level="critical", 
