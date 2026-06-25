@@ -1,8 +1,12 @@
 import json
 
-from commitment_transaction import CommitmentTransaction
-from funding_transaction import Contribution, create_funding_transaction
-from node import Channel, LightningNode
+from lightningnetwork import (
+    Channel,
+    CommitmentTransaction,
+    Contribution,
+    LightningNode,
+    create_funding_transaction,
+)
 
 from ..client import NetworkClient
 

@@ -1,4 +1,4 @@
-from node import LightningNode
+from lightningnetwork import LightningNode
 
 
 async def handle(node: LightningNode, body: bytes):

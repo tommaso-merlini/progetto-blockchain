@@ -1,7 +1,11 @@
 import json
 
-from funding_transaction import Contribution, create_funding_transaction
-from node import LightningNode, PendingFunding
+from lightningnetwork import (
+    Contribution,
+    LightningNode,
+    PendingFunding,
+    create_funding_transaction,
+)
 
 
 async def handle(node: LightningNode, body: bytes):

@@ -1,6 +1,6 @@
 import json
 
-from node import LightningNode
+from lightningnetwork import LightningNode
 
 from . import trigger_update
 

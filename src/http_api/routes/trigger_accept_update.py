@@ -1,5 +1,4 @@
-from commitment_transaction import CommitmentTransaction
-from node import LightningNode
+from lightningnetwork import CommitmentTransaction, LightningNode
 
 from ..client import NetworkClient
 

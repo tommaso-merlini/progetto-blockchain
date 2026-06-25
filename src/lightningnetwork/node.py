@@ -4,8 +4,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from funding_transaction import FundingTransaction, Contribution
-from commitment_transaction import CommitmentTransaction
+from .commitment_transaction import CommitmentTransaction
+from .funding_transaction import FundingTransaction
 
 @dataclass
 class Channel:

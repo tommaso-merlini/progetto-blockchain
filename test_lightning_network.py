@@ -11,7 +11,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 from http_api import HttpInterface, NetworkClient
 from http_api.routes import trigger_fund
-from node import LightningNode
+from lightningnetwork import LightningNode
 
 def json_post(url: str, payload: dict) -> dict:
     """Invia una richiesta HTTP POST con payload JSON di utilità per i test."""

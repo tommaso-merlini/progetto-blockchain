@@ -1,7 +1,6 @@
 import json
 
-from commitment_transaction import CommitmentTransaction
-from node import LightningNode
+from lightningnetwork import CommitmentTransaction, LightningNode
 
 
 async def handle(node: LightningNode, body: bytes):

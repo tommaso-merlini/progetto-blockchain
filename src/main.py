@@ -3,7 +3,7 @@ import re
 import asyncio
 import uvicorn
 
-from node import LightningNode
+from lightningnetwork import LightningNode
 from http_api import HttpInterface
 from cli import ChannelCLI
 

@@ -1,4 +1,4 @@
-from node import LightningNode
+from lightningnetwork import LightningNode
 
 from ..client import NetworkClient
 
