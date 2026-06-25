@@ -1,19 +1,4 @@
-[ ] invalidare le vecchie transazioni
-	[x] ogni volta che si aggiorna il canale i due attori si devono scambiare un segreto sulla transazione precedente
-
-	[x] entro quanto puoi riscattare i tuoi soldi se provano a validare una transazione vecchia? => TIME LOCK
-
-	[ ] spostare tutta la logica del lightning network negli attori, sono gli attori DECENTRALIZZATI a dover tener traccia dello stato, non la classe CENTRALIZZATA lightning network
-		Una versione minima funzionante potrebbe avere questo protocollo:
-		  1. Alice propone tx1.
-		  2. Bob verifica tx1.
-		  3. Bob firma tx1 e manda la firma ad Alice.
-		  4. Alice verifica la firma di Bob e salva tx1 come commitment valida.
-		  5. Alice rivela il suo secret di tx0.
-		  6. Bob verifica e salva il secret di Alice.
-		  7. Bob rivela il suo secret di tx0.
-		  8. Alice verifica e salva il secret di Bob.
-
-	[ ] come entra in gioco l'hash time lock?
-
-	[ ] implementare grafo su lightning network
+[ ] invalidare vecchie transazioni
+[ ] punire altro nodo se pubblica vecchia transazione
+[ ] hash time lock
+[ ] grafo tra nodi
