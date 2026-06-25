@@ -25,6 +25,29 @@ def json_post(url: str, payload: dict) -> dict:
         return json.loads(response.read().decode())
 
 
+def manual_update(
+    proposer_url: str,
+    responder_url: str,
+    funding_id: str,
+    own_amount: int,
+    peer_amount: int,
+) -> None:
+    """Esegue l'update manuale in due passaggi: proposta e accettazione."""
+    json_post(
+        f"{proposer_url}/client/propose-update",
+        {
+            "funding_id": funding_id,
+            "own_amount": own_amount,
+            "peer_amount": peer_amount,
+            "peer_url": responder_url,
+        },
+    )
+    json_post(
+        f"{responder_url}/client/accept-update",
+        {"funding_id": funding_id, "proposer_url": proposer_url},
+    )
+
+
 class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
     async def test_initial_commitments_use_owner_revocation_hash(self):
         alice = LightningNode()
@@ -183,7 +206,7 @@ class TestSection1_Direct(LightningTestBase):
         funding_id = response["funding_id"]
         
         self.add_step("Alice esegue un pagamento off-chain inviando il segreto crittografico corretto (Alice=40, Bob=60)")
-        json_post("http://localhost:8001/client/update", {"funding_id": funding_id, "own_amount": 40, "peer_amount": 60, "peer_url": "http://localhost:8002"})
+        manual_update("http://localhost:8001", "http://localhost:8002", funding_id, 40, 60)
         
         self.assertEqual(self.get_node_status(8002)[funding_id]["own_amount"], 60)
         self.print_snapshot("D1", "SEGRETO CORRETTO", "Alice=40, Bob=60", "50/50")
@@ -194,7 +217,7 @@ class TestSection1_Direct(LightningTestBase):
         funding_id = response["funding_id"]
         
         self.add_step("Alice isola e vincola 20 monete all'interno di un HTLC")
-        json_post("http://localhost:8001/client/update", {"funding_id": funding_id, "own_amount": 80, "peer_amount": 120, "peer_url": "http://localhost:8002"})
+        manual_update("http://localhost:8001", "http://localhost:8002", funding_id, 80, 120)
         
         self.assertEqual(self.get_node_status(8001)[funding_id]["own_amount"], 80)
         self.print_snapshot("D2", "TIME HASH LOCK ISOLATION", "Alice=80 (20 monete allocate in HTLC)", "100/100")
@@ -204,7 +227,7 @@ class TestSection1_Direct(LightningTestBase):
         funding_id = response["funding_id"]
         
         self.add_step("Bob sperimenta latenza di rete. Alice propone una transizione parziale a 45/55")
-        json_post("http://localhost:8001/client/update", {"funding_id": funding_id, "own_amount": 45, "peer_amount": 55, "peer_url": "http://localhost:8002"})
+        manual_update("http://localhost:8001", "http://localhost:8002", funding_id, 45, 55)
         
         self.assertEqual(self.get_node_status(8002)[funding_id]["own_amount"], 55)
         self.print_snapshot("D3", "NODO RITARDA (LATENZA)", "Bob riceve e allinea lo stato a 55", "50/50")
@@ -213,7 +236,7 @@ class TestSection1_Direct(LightningTestBase):
         self.add_step("Alice tenta l'aggiornamento verso un peer disconnesso o inesistente")
         
         with self.assertRaises(Exception):
-            json_post("http://localhost:8001/client/update", {"funding_id": "err", "own_amount": 10, "peer_amount": 90, "peer_url": "http://localhost:8099"})
+            manual_update("http://localhost:8001", "http://localhost:8099", "err", 10, 90)
         
         self.add_step("Il client va in timeout interrompendo l'aggiornamento atomico")
         self.print_snapshot("D4", "NODO NON PAGA / OFFLINE", "Richiesta interrotta via Timeout Eccezione", "N/A")
@@ -234,7 +257,7 @@ class TestSection1_Direct(LightningTestBase):
         funding_id = response["funding_id"]
         
         self.add_step("Apertura di una pipeline di instradamento con scadenza remota estesa (100 blocchi)")
-        json_post("http://localhost:8001/client/update", {"funding_id": funding_id, "own_amount": 150, "peer_amount": 250, "peer_url": "http://localhost:8002"})
+        manual_update("http://localhost:8001", "http://localhost:8002", funding_id, 150, 250)
         
         self.assertEqual(self.get_node_status(8001)[funding_id]["own_amount"], 150)
         self.print_snapshot("D6", "TIMEOUT LUNGO SULLA FILIERA", "Canale stabile, bilancio aggiornato ad indice 1", "200/200")
@@ -265,9 +288,9 @@ class TestSection2_Chain(LightningTestBase):
         cid_db = json_post("http://localhost:8004/client/fund", {"own_amount": 100, "peer_amount": 100, "peer_url": "http://localhost:8002"})["funding_id"]
         
         self.add_step("Risoluzione a ritroso della catena (Backward Settlement): Bob propaga il segreto fino ad Alice")
-        json_post("http://localhost:8004/client/update", {"funding_id": cid_db, "own_amount": 90, "peer_amount": 110, "peer_url": "http://localhost:8002"})
-        json_post("http://localhost:8003/client/update", {"funding_id": cid_cd, "own_amount": 90, "peer_amount": 110, "peer_url": "http://localhost:8004"})
-        json_post("http://localhost:8001/client/update", {"funding_id": cid_ac, "own_amount": 90, "peer_amount": 110, "peer_url": "http://localhost:8003"})
+        manual_update("http://localhost:8004", "http://localhost:8002", cid_db, 90, 110)
+        manual_update("http://localhost:8003", "http://localhost:8004", cid_cd, 90, 110)
+        manual_update("http://localhost:8001", "http://localhost:8003", cid_ac, 90, 110)
         
         self.assertEqual(self.get_node_status(8002)[cid_db]["own_amount"], 110)
         self.print_snapshot("C1", "CATENA MULTI-HOP (SUCCESS)", "Bob incrementa a 110, intermedi liquidati a 100", "Tutti i canali a 100/100")
@@ -277,7 +300,7 @@ class TestSection2_Chain(LightningTestBase):
         cid_cd = json_post("http://localhost:8003/client/fund", {"own_amount": 50, "peer_amount": 50, "peer_url": "http://localhost:8004"})["funding_id"]
         
         self.add_step("Alice blocca i fondi sul primo segmento (Alice -> Carol)")
-        json_post("http://localhost:8001/client/update", {"funding_id": cid_ac, "own_amount": 40, "peer_amount": 60, "peer_url": "http://localhost:8003"})
+        manual_update("http://localhost:8001", "http://localhost:8003", cid_ac, 40, 60)
         
         self.add_step("I fondi rimangono isolati sul canale AC in attesa della risoluzione del segmento successivo")
         self.assertEqual(self.get_node_status(8001)[cid_ac]["own_amount"], 40)
@@ -289,11 +312,11 @@ class TestSection2_Chain(LightningTestBase):
         cid_cd = json_post("http://localhost:8003/client/fund", {"own_amount": 60, "peer_amount": 60, "peer_url": "http://localhost:8004"})["funding_id"]
         
         self.add_step("Alice aggiorna il primo hop. Carol introduce un ritardo software prima di inoltrare")
-        json_post("http://localhost:8001/client/update", {"funding_id": cid_ac, "own_amount": 50, "peer_amount": 70, "peer_url": "http://localhost:8003"})
+        manual_update("http://localhost:8001", "http://localhost:8003", cid_ac, 50, 70)
         time.sleep(0.5)
         
         self.add_step("Carol riprende le operazioni e finalizza il secondo hop verso Dave")
-        json_post("http://localhost:8003/client/update", {"funding_id": cid_cd, "own_amount": 50, "peer_amount": 70, "peer_url": "http://localhost:8004"})
+        manual_update("http://localhost:8003", "http://localhost:8004", cid_cd, 50, 70)
         
         self.assertEqual(self.get_node_status(8004)[cid_cd]["own_amount"], 70)
         self.print_snapshot("C3", "CATENA CON RITARDO INTERMEDIO", "Dave riceve correttamente i fondi dopo la latenza", "60/60")
@@ -322,8 +345,8 @@ class TestSection2_Chain(LightningTestBase):
         cid_cd = json_post("http://localhost:8003/client/fund", {"own_amount": 500, "peer_amount": 500, "peer_url": "http://localhost:8004"})["funding_id"]
         
         self.add_step("Configurazione ed esecuzione di una catena multi-hop ad alta capacità")
-        json_post("http://localhost:8001/client/update", {"funding_id": cid_ac, "own_amount": 300, "peer_amount": 700, "peer_url": "http://localhost:8003"})
-        json_post("http://localhost:8003/client/update", {"funding_id": cid_cd, "own_amount": 300, "peer_amount": 700, "peer_url": "http://localhost:8004"})
+        manual_update("http://localhost:8001", "http://localhost:8003", cid_ac, 300, 700)
+        manual_update("http://localhost:8003", "http://localhost:8004", cid_cd, 300, 700)
         
         self.assertEqual(self.get_node_status(8004)[cid_cd]["own_amount"], 700)
         self.print_snapshot("C6", "SICUREZZA FLUSSO AD ALTA CAPACITÀ", "Dave riceve ed allinea l'allocazione a 700", "500/500")

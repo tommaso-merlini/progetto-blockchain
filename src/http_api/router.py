@@ -3,15 +3,15 @@ from lightningnetwork import LightningNode
 from .routes import (
     get_public_key,
     get_status,
+    post_client_accept_update,
     post_client_fund,
-    post_client_update,
+    post_client_propose_update,
     post_complete_funding,
     post_complete_update,
     post_funding,
     post_propose_update,
     post_revoke_state,
     post_sign_pending_update,
-    post_sign_update,
 )
 
 
@@ -33,8 +33,6 @@ class HttpInterface:
                 return await post_complete_funding.handle(self.node, body)
             case "POST", "/propose-update":
                 return await post_propose_update.handle(self.node, body)
-            case "POST", "/sign-update":
-                return await post_sign_update.handle(self.node, body)
             case "POST", "/sign-pending-update":
                 return await post_sign_pending_update.handle(self.node, body)
             case "POST", "/complete-update":
@@ -43,8 +41,10 @@ class HttpInterface:
                 return await post_revoke_state.handle(self.node, body)
             case "POST", "/client/fund":
                 return await post_client_fund.handle(self.node, body)
-            case "POST", "/client/update":
-                return await post_client_update.handle(self.node, body)
+            case "POST", "/client/propose-update":
+                return await post_client_propose_update.handle(self.node, body)
+            case "POST", "/client/accept-update":
+                return await post_client_accept_update.handle(self.node, body)
             case _:
                 return 404, b"Not Found\n", b"text/plain"
 
