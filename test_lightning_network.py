@@ -543,6 +543,98 @@ class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
         self.assertIn(alice.public_key, pending.commitment.signatures)
         self.assertIn(bob.public_key, pending.commitment.signatures)
 
+    async def test_invalid_close_without_peer_signature_is_rejected_by_blockchain(
+        self,
+    ):
+        alice = LightningNode()
+        bob = LightningNode()
+        funding_id = attach_test_channel(alice, bob, 50, 50)
+        blockchain = MockBlockchain()
+        blockchain.add_multisig(alice.channels[funding_id].funding)
+        alice_interface = HttpInterface(alice)
+
+        original_publish_close = MockBlockchainClient.__dict__["publish_close"]
+
+        async def fake_publish_close(commitment: CommitmentTransaction) -> dict:
+            pending = blockchain.publish_close(commitment)
+            return {
+                "funding_id": commitment.funding_id,
+                "published_at_block": pending.published_at_block,
+                "deadline_block": pending.deadline_block,
+            }
+
+        MockBlockchainClient.publish_close = staticmethod(fake_publish_close)
+        try:
+            status, body, _ = await alice_interface.dispatch(
+                "POST",
+                "/client/close-channel-invalid-signature",
+                json.dumps(
+                    {
+                        "funding_id": funding_id,
+                        "tx_index": 0,
+                        "mode": "missing_peer_signature",
+                    }
+                ).encode(),
+            )
+        finally:
+            MockBlockchainClient.publish_close = original_publish_close
+
+        self.assertEqual(status, 400)
+        self.assertIn("entrambe le firme", body.decode())
+        self.assertNotIn(funding_id, blockchain.pending_closes)
+        stored_commitment = alice.channels[funding_id].commitments[0]
+        self.assertIn(bob.public_key, stored_commitment.signatures)
+        self.assertNotIn(alice.public_key, stored_commitment.signatures)
+
+    async def test_invalid_close_with_fake_peer_signature_is_rejected_by_blockchain(
+        self,
+    ):
+        alice = LightningNode()
+        bob = LightningNode()
+        funding_id = attach_test_channel(alice, bob, 50, 50)
+        blockchain = MockBlockchain()
+        blockchain.add_multisig(alice.channels[funding_id].funding)
+        alice_interface = HttpInterface(alice)
+        original_peer_signature = (
+            alice.channels[funding_id].commitments[0].signatures[bob.public_key]
+        )
+
+        original_publish_close = MockBlockchainClient.__dict__["publish_close"]
+
+        async def fake_publish_close(commitment: CommitmentTransaction) -> dict:
+            pending = blockchain.publish_close(commitment)
+            return {
+                "funding_id": commitment.funding_id,
+                "published_at_block": pending.published_at_block,
+                "deadline_block": pending.deadline_block,
+            }
+
+        MockBlockchainClient.publish_close = staticmethod(fake_publish_close)
+        try:
+            status, body, _ = await alice_interface.dispatch(
+                "POST",
+                "/client/close-channel-invalid-signature",
+                json.dumps(
+                    {
+                        "funding_id": funding_id,
+                        "tx_index": 0,
+                        "mode": "fake_peer_signature",
+                    }
+                ).encode(),
+            )
+        finally:
+            MockBlockchainClient.publish_close = original_publish_close
+
+        self.assertEqual(status, 400)
+        self.assertIn("Firma non valida", body.decode())
+        self.assertNotIn(funding_id, blockchain.pending_closes)
+        stored_commitment = alice.channels[funding_id].commitments[0]
+        self.assertEqual(
+            stored_commitment.signatures[bob.public_key],
+            original_peer_signature,
+        )
+        self.assertNotIn(alice.public_key, stored_commitment.signatures)
+
     async def test_close_channel_can_publish_past_local_commitment(self):
         alice = LightningNode()
         bob = LightningNode()

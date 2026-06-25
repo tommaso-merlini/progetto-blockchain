@@ -8,6 +8,7 @@ import {
   Plus,
   RefreshCw,
   Send,
+  ShieldAlert,
   X,
 } from "lucide-react";
 import {
@@ -94,6 +95,18 @@ type ClaimRevokedCloseResponse = {
 type ActiveDialog = "propose" | "accept" | "acceptFunding" | null;
 type ChannelPeerUrls = Record<string, string>;
 type CloseTxSelections = Record<string, number>;
+type InvalidCloseSignatureMode = "missing_peer_signature" | "fake_peer_signature";
+type InvalidCloseModeSelections = Record<string, InvalidCloseSignatureMode>;
+
+const defaultInvalidCloseMode: InvalidCloseSignatureMode =
+  "missing_peer_signature";
+const invalidCloseSignatureModes: Array<{
+  value: InvalidCloseSignatureMode;
+  label: string;
+}> = [
+  { value: "missing_peer_signature", label: "Missing peer signature" },
+  { value: "fake_peer_signature", label: "Fake peer signature" },
+];
 
 function normalizeUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
@@ -295,6 +308,8 @@ function App() {
   );
   const [selectedCloseTxIndices, setSelectedCloseTxIndices] =
     useState<CloseTxSelections>({});
+  const [selectedInvalidCloseModes, setSelectedInvalidCloseModes] =
+    useState<InvalidCloseModeSelections>({});
   const [lastPeerUrl, setLastPeerUrl] = useState(() => {
     return localStorage.getItem(LAST_PEER_URL_STORAGE_KEY) ?? "";
   });
@@ -534,6 +549,26 @@ function App() {
   }, [channels]);
 
   useEffect(() => {
+    setSelectedInvalidCloseModes((current) => {
+      const next: InvalidCloseModeSelections = {};
+      let changed = false;
+
+      for (const [channelId] of channels) {
+        next[channelId] = current[channelId] ?? defaultInvalidCloseMode;
+        if (current[channelId] !== next[channelId]) {
+          changed = true;
+        }
+      }
+
+      if (Object.keys(current).length !== channels.length) {
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [channels]);
+
+  useEffect(() => {
     if (!channels[0]) {
       return;
     }
@@ -682,6 +717,28 @@ function App() {
     );
   }
 
+  function handleInvalidCloseChannel(
+    channelId: string,
+    txIndex: number,
+    mode: InvalidCloseSignatureMode,
+  ) {
+    void runAction(
+      () =>
+        apiPost<CloseChannelResponse>(
+          normalizedApiUrl,
+          "/client/close-channel-invalid-signature",
+          {
+            funding_id: channelId,
+            tx_index: txIndex,
+            mode,
+          },
+        ),
+      (result) => {
+        return `Invalid close was accepted unexpectedly at block #${result.published_at_block}; finalizable at block #${result.deadline_block}.`;
+      },
+    );
+  }
+
   function handleFinalizeClose(channelId: string) {
     void runAction(
       () =>
@@ -776,11 +833,8 @@ function App() {
         </form>
       </header>
 
-      {notice && (
-        <Alert
-          className="mt-5"
-          variant={notice.tone === "success" ? "success" : "destructive"}
-        >
+      {notice?.tone === "success" && (
+        <Alert className="mt-5" variant="success">
           {notice.message}
         </Alert>
       )}
@@ -934,6 +988,8 @@ function App() {
                   closeCommitments[0];
                 const publishCloseTxIndex =
                   selectedCloseCommitment?.tx_index ?? channel.current_index;
+                const invalidCloseMode =
+                  selectedInvalidCloseModes[channelId] ?? defaultInvalidCloseMode;
                 const isChainBlocked = Boolean(pendingClose || multisig?.spent);
                 const canClaimRevokedClose = Boolean(
                   publicKey &&
@@ -1043,40 +1099,73 @@ function App() {
                           </small>
                         )}
                       </div>
-                      <Field
-                        htmlFor={`close-state-${channelId}`}
-                        label="Close state"
-                      >
-                        <Select
-                          disabled={
-                            isLoading ||
-                            Boolean(pending) ||
-                            isChainBlocked ||
-                            !multisig
-                          }
-                          value={String(publishCloseTxIndex)}
-                          onValueChange={(value) =>
-                            setSelectedCloseTxIndices((current) => ({
-                              ...current,
-                              [channelId]: Number(value),
-                            }))
-                          }
+                      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(210px,260px)]">
+                        <Field
+                          htmlFor={`close-state-${channelId}`}
+                          label="Close state"
                         >
-                          <SelectTrigger id={`close-state-${channelId}`}>
-                            <SelectValue placeholder="Select close state" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {closeCommitments.map((commitment) => (
-                              <SelectItem
-                                key={commitment.tx_index}
-                                value={String(commitment.tx_index)}
-                              >
-                                {closeStateLabel(commitment)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </Field>
+                          <Select
+                            disabled={
+                              isLoading ||
+                              Boolean(pending) ||
+                              isChainBlocked ||
+                              !multisig
+                            }
+                            value={String(publishCloseTxIndex)}
+                            onValueChange={(value) =>
+                              setSelectedCloseTxIndices((current) => ({
+                                ...current,
+                                [channelId]: Number(value),
+                              }))
+                            }
+                          >
+                            <SelectTrigger id={`close-state-${channelId}`}>
+                              <SelectValue placeholder="Select close state" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {closeCommitments.map((commitment) => (
+                                <SelectItem
+                                  key={commitment.tx_index}
+                                  value={String(commitment.tx_index)}
+                                >
+                                  {closeStateLabel(commitment)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                        <Field
+                          htmlFor={`invalid-close-mode-${channelId}`}
+                          label="Invalid signature"
+                        >
+                          <Select
+                            disabled={
+                              isLoading ||
+                              Boolean(pending) ||
+                              isChainBlocked ||
+                              !multisig
+                            }
+                            value={invalidCloseMode}
+                            onValueChange={(value) =>
+                              setSelectedInvalidCloseModes((current) => ({
+                                ...current,
+                                [channelId]: value as InvalidCloseSignatureMode,
+                              }))
+                            }
+                          >
+                            <SelectTrigger id={`invalid-close-mode-${channelId}`}>
+                              <SelectValue placeholder="Invalid signature" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {invalidCloseSignatureModes.map((mode) => (
+                                <SelectItem key={mode.value} value={mode.value}>
+                                  {mode.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                      </div>
                       <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-1">
                         <Button
                           size="sm"
@@ -1117,6 +1206,28 @@ function App() {
                         >
                           <Lock className="size-4" />
                           Publish close
+                        </Button>
+                        <Button
+                          size="sm"
+                          type="button"
+                          variant="outline"
+                          disabled={
+                            isLoading ||
+                            Boolean(pending) ||
+                            isChainBlocked ||
+                            !multisig
+                          }
+                          title="Publish the selected commitment with an invalid peer signature"
+                          onClick={() =>
+                            handleInvalidCloseChannel(
+                              channelId,
+                              publishCloseTxIndex,
+                              invalidCloseMode,
+                            )
+                          }
+                        >
+                          <ShieldAlert className="size-4" />
+                          Publish invalid close
                         </Button>
                         {canClaimRevokedClose && (
                           <Button
@@ -1504,6 +1615,23 @@ function App() {
               </Button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {notice?.tone === "error" && (
+        <Modal title="Action rejected" onClose={() => setNotice(null)}>
+          <div className="grid gap-4 p-4">
+            <Alert variant="destructive">{notice.message}</Alert>
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setNotice(null)}
+              >
+                Close
+              </Button>
+            </div>
+          </div>
         </Modal>
       )}
     </main>
