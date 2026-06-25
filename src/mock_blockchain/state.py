@@ -142,7 +142,9 @@ class MockBlockchain:
         if claimant not in public_keys:
             raise ValueError("Il claimant non appartiene al multisig")
         if claimant == commitment.owner:
-            raise ValueError("L'owner della commitment non puo' reclamare la propria close")
+            raise ValueError(
+                "L'owner della commitment non puo' reclamare la propria close"
+            )
 
         expected_hash = hashlib.sha256(secret.encode()).hexdigest()
         if expected_hash != commitment.revocation_hash:
