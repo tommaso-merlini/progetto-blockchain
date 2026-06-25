@@ -11,6 +11,7 @@ from .funding_transaction import FundingTransaction
 class Channel:
     funding: FundingTransaction
     current_index: int = 0
+    peer_url: Optional[str] = None
     commitments: dict[int, CommitmentTransaction] = field(default_factory=dict)
     own_secrets: dict[int, str] = field(default_factory=dict)
     peer_hashes: dict[int, str] = field(default_factory=dict)
@@ -22,6 +23,7 @@ class PendingFunding:
     funding: FundingTransaction
     own_secret: str
     peer_hash: str
+    peer_url: Optional[str] = None
 
 class LightningNode:
     def __init__(self):

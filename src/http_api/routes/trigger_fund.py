@@ -11,8 +11,16 @@ from lightningnetwork import (
 from ..client import NetworkClient
 
 
-async def run(node: LightningNode, own_amount: int, peer_amount: int, peer_url: str):
+async def run(
+    node: LightningNode,
+    own_amount: int,
+    peer_amount: int,
+    peer_url: str,
+    own_url: str | None = None,
+):
     peer_url = peer_url.rstrip("/")
+    if own_url is not None:
+        own_url = own_url.rstrip("/")
     peer_key = await NetworkClient.fetch_public_key(peer_url)
 
     funding = create_funding_transaction(
@@ -26,6 +34,8 @@ async def run(node: LightningNode, own_amount: int, peer_amount: int, peer_url: 
         "funding": json.loads(funding.serialize().decode()),
         "initial_hash": own_hash,
     }
+    if own_url:
+        payload["peer_url"] = own_url
     response = await NetworkClient.post(f"{peer_url}/funding", payload)
     peer_hash = response["initial_hash"]
 
@@ -45,7 +55,7 @@ async def run(node: LightningNode, own_amount: int, peer_amount: int, peer_url: 
         },
     )
 
-    channel = Channel(funding=funding, current_index=0)
+    channel = Channel(funding=funding, current_index=0, peer_url=peer_url)
     channel.own_secrets[0] = own_secret
     channel.peer_hashes[0] = peer_hash
 

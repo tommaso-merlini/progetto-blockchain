@@ -26,7 +26,11 @@ async def handle(node: LightningNode, body: bytes):
         if not own_commitment.verify(peer_key, data["signature"]):
             raise ValueError("Firma iniziale del peer non valida")
 
-        channel = Channel(funding=funding, current_index=0)
+        channel = Channel(
+            funding=funding,
+            current_index=0,
+            peer_url=pending.peer_url,
+        )
         channel.own_secrets[0] = pending.own_secret
         channel.peer_hashes[0] = pending.peer_hash
         own_commitment.signatures = {peer_key: data["signature"]}

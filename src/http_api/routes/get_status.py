@@ -12,6 +12,8 @@ async def handle(node: LightningNode, body: bytes):
             "own_amount": current_commitment.own_amount,
             "peer_amount": current_commitment.peer_amount,
         }
+        if channel.peer_url:
+            status_data[channel_id]["peer_url"] = channel.peer_url
         if channel.pending_update:
             pending = channel.pending_update
             role = pending.get("role", "responder")

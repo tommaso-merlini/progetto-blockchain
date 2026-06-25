@@ -61,13 +61,27 @@ class HttpInterface:
 
         method = scope["method"]
         path = scope["path"]
-        status, response_body, content_type = await self.dispatch(method, path, body)
+        if method == "OPTIONS":
+            status, response_body, content_type = 204, b"", b"text/plain"
+        else:
+            status, response_body, content_type = await self.dispatch(method, path, body)
 
         await send(
             {
                 "type": "http.response.start",
                 "status": status,
-                "headers": [(b"content-type", content_type)],
+                "headers": [
+                    (b"content-type", content_type),
+                    (b"access-control-allow-origin", b"*"),
+                    (
+                        b"access-control-allow-methods",
+                        b"GET, POST, OPTIONS",
+                    ),
+                    (
+                        b"access-control-allow-headers",
+                        b"Content-Type",
+                    ),
+                ],
             }
         )
         await send({"type": "http.response.body", "body": response_body})

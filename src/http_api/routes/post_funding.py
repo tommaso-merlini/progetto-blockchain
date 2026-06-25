@@ -17,11 +17,16 @@ async def handle(node: LightningNode, body: bytes):
         funding.get_own_contribution(node.public_key)
         funding.get_peer_contribution(node.public_key)
 
+        peer_url = data.get("peer_url")
+        if peer_url is not None:
+            peer_url = str(peer_url).rstrip("/")
+
         initial_secret = node.generate_secret()
         node.pending_fundings[funding.id] = PendingFunding(
             funding=funding,
             own_secret=initial_secret,
             peer_hash=data["initial_hash"],
+            peer_url=peer_url,
         )
 
         response = {

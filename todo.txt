@@ -2,3 +2,4 @@
 [ ] punire altro nodo se pubblica vecchia transazione
 [ ] hash time lock
 [ ] grafo tra nodi
+[ ] persistenza stato su disco

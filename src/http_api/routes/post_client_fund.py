@@ -13,6 +13,7 @@ async def handle(node: LightningNode, body: bytes):
             data["own_amount"],
             data["peer_amount"],
             data["peer_url"],
+            data.get("own_url"),
         )
         return 200, json.dumps({"funding_id": funding_id}).encode(), b"application/json"
     except Exception as e:

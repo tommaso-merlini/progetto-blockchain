@@ -11,7 +11,39 @@ sys.path.insert(0, str(SRC_DIR))
 
 from http_api import HttpInterface, NetworkClient
 from http_api.routes import trigger_fund
-from lightningnetwork import LightningNode
+from lightningnetwork import (
+    Channel,
+    CommitmentTransaction,
+    Contribution,
+    LightningNode,
+    create_funding_transaction,
+)
+
+
+def attach_test_channel(node: LightningNode, peer: LightningNode, own: int, peer_amount: int):
+    funding = create_funding_transaction(
+        Contribution(node.public_key, own),
+        Contribution(peer.public_key, peer_amount),
+    )
+    own_secret = node.generate_secret()
+    own_hash = node.hash_sha256(own_secret)
+    peer_secret = peer.generate_secret()
+    peer_hash = peer.hash_sha256(peer_secret)
+    channel = Channel(funding=funding, current_index=0)
+    channel.own_secrets[0] = own_secret
+    channel.peer_hashes[0] = peer_hash
+    commitment = CommitmentTransaction(
+        funding_id=funding.id,
+        tx_index=0,
+        owner=node.public_key,
+        own_amount=own,
+        peer_amount=peer_amount,
+        revocation_hash=own_hash,
+    )
+    commitment.signatures = {peer.public_key: commitment.sign(peer.private_key)}
+    channel.commitments[0] = commitment
+    node.channels[funding.id] = channel
+    return funding.id
 
 def json_post(url: str, payload: dict) -> dict:
     """Invia una richiesta HTTP POST con payload JSON di utilità per i test."""
@@ -49,6 +81,55 @@ def manual_update(
 
 
 class TestFundingHandshakeProtocol(unittest.IsolatedAsyncioTestCase):
+    async def test_update_rejects_negative_balances(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        funding_id = attach_test_channel(alice, bob, 50, 50)
+        alice_interface = HttpInterface(alice)
+
+        status, body, _ = await alice_interface.dispatch(
+            "POST",
+            "/client/propose-update",
+            json.dumps(
+                {
+                    "funding_id": funding_id,
+                    "own_amount": -1,
+                    "peer_amount": 101,
+                    "peer_url": "bob",
+                }
+            ).encode(),
+        )
+
+        self.assertEqual(status, 400)
+        self.assertIn("non possono essere negativi", body.decode())
+        self.assertEqual(alice.channels[funding_id].current_index, 0)
+        self.assertIsNone(alice.channels[funding_id].pending_update)
+
+    async def test_update_rejects_ambiguous_numeric_types(self):
+        alice = LightningNode()
+        bob = LightningNode()
+        funding_id = attach_test_channel(alice, bob, 50, 50)
+        alice_interface = HttpInterface(alice)
+
+        for own_amount in ("40", 40.0, True):
+            with self.subTest(own_amount=own_amount):
+                status, body, _ = await alice_interface.dispatch(
+                    "POST",
+                    "/propose-update",
+                    json.dumps(
+                        {
+                            "funding_id": funding_id,
+                            "own_amount": own_amount,
+                            "peer_amount": 60,
+                            "next_hash": alice.hash_sha256("next"),
+                        }
+                    ).encode(),
+                )
+
+                self.assertEqual(status, 400)
+                self.assertIn("numeri interi JSON", body.decode())
+                self.assertIsNone(alice.channels[funding_id].pending_update)
+
     async def test_initial_commitments_use_owner_revocation_hash(self):
         alice = LightningNode()
         bob = LightningNode()

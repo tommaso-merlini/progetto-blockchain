@@ -17,6 +17,9 @@ async def handle(node: LightningNode, body: bytes):
         )
 
         channel.peer_hashes[next_index] = data["next_hash"]
+        peer_url = data.get("peer_url")
+        if peer_url is not None:
+            channel.peer_url = str(peer_url).rstrip("/")
         channel.pending_update = {
             "role": "responder",
             "next_index": next_index,

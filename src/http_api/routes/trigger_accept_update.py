@@ -63,4 +63,5 @@ async def run(node: LightningNode, funding_id: str, peer_url: str):
 
     channel.revoked_peer_secrets[old_index] = complete_response["secret"]
     channel.current_index = next_index
+    channel.peer_url = peer_url
     channel.pending_update = None

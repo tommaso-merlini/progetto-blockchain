@@ -1,2 +1,4 @@
 __pycache__/
 *.py[cod]
+ui/node_modules/
+ui/dist/

@@ -14,6 +14,7 @@ async def handle(node: LightningNode, body: bytes):
             data["own_amount"],
             data["peer_amount"],
             data["peer_url"],
+            data.get("own_url"),
         )
         return (
             200,
