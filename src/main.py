@@ -4,7 +4,7 @@ import asyncio
 import uvicorn
 
 from node import LightningNode
-from http_interface import HttpInterface
+from http_api import HttpInterface
 from cli import ChannelCLI
 
 # Componenti core condivisi da CLI e server HTTP.
@@ -29,7 +29,7 @@ async def main_async() -> None:
         raise SystemExit("Uso: python src/main.py <port>")
 
     port = int(sys.argv[1])
-    cli = ChannelCLI(node, interface)
+    cli = ChannelCLI(node)
 
     # Usa l'app già in memoria: così CLI e server HTTP condividono lo stesso nodo.
     config = uvicorn.Config(

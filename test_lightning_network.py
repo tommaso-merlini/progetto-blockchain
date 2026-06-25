@@ -9,7 +9,7 @@ from urllib.request import urlopen, Request
 SRC_DIR = Path(__file__).resolve().parent / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from http_interface import HttpInterface, NetworkClient
+from http_api import HttpInterface, NetworkClient
 from http_api.routes import trigger_fund
 from node import LightningNode
 

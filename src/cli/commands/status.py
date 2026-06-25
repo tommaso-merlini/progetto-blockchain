@@ -1,4 +1,4 @@
-async def status(node, _interface, _tokens: list[str]) -> None:
+async def status(node, _tokens: list[str]) -> None:
     if not node.channels:
         print("\nNessun canale attivo.")
     for channel_id, channel in node.channels.items():

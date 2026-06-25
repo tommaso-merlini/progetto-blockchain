@@ -1,7 +1,7 @@
 from http_api.routes import trigger_propose_update
 
 
-async def propose_update(node, _interface, tokens: list[str]) -> None:
+async def propose_update(node, tokens: list[str]) -> None:
     if len(tokens) != 5:
         print(
             "Uso: propose-update <funding_id> <new_own_amount> "

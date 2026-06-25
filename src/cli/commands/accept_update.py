@@ -1,7 +1,7 @@
 from http_api.routes import trigger_accept_update
 
 
-async def accept_update(node, _interface, tokens: list[str]) -> None:
+async def accept_update(node, tokens: list[str]) -> None:
     if len(tokens) != 3:
         print("Uso: accept-update <funding_id> <proposer_url>")
         return
